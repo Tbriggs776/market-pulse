@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Search, Eye, Filter, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react'
 import { screenerApi } from '../lib/api'
@@ -316,7 +317,12 @@ export default function Research() {
                 filteredStocks.map((stock) => (
                   <tr key={stock.ticker} className="hover:bg-gray-50">
                     <td className="p-4">
-                      <span className="font-semibold text-primary-600">{stock.ticker}</span>
+                      <Link
+                        to={`/stock/${stock.ticker}`}
+                        className="font-semibold text-primary-600 hover:text-primary-800 hover:underline"
+                      >
+                        {stock.ticker}
+                      </Link>
                     </td>
                     <td className="p-4">
                       <span className="text-gray-900">{stock.name}</span>
