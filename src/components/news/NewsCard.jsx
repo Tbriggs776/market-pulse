@@ -49,8 +49,8 @@ export default function NewsCard({ article }) {
   const categoryClass = CATEGORY_STYLES[article.category] || 'badge-neutral'
   const categoryLabel = CATEGORY_LABELS[article.category] || article.category
 
-  return (
-    
+return (
+    <a
       href={article.url}
       target="_blank"
       rel="noopener noreferrer"
