@@ -9,7 +9,23 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-// Watchlist operations
+/**
+ * Watchlist operations
+ *
+ * Schema (existing table `watchlist`):
+ *   id          uuid pk
+ *   symbol      text
+ *   name        text
+ *   exchange    text       (added in migration 002, see TODO below)
+ *   added_price numeric    (added in migration 002)
+ *   alert_price numeric    (added in migration 002, nullable)
+ *   created_at  timestamp
+ *
+ * TODO: The current Supabase `watchlist` table only has symbol/name/created_at.
+ * We need to run a migration to add exchange/added_price/alert_price columns
+ * before the new Watchlist page (Phase 2) will work end-to-end. The migration
+ * SQL is documented in /docs/migrations.md (created in Pass 2).
+ */
 export const watchlistApi = {
   async getAll() {
     const { data, error } = await supabase
@@ -20,88 +36,42 @@ export const watchlistApi = {
     return data
   },
 
-  async add(symbol, name) {
+  async add({ symbol, name, exchange = null, addedPrice = null }) {
     const { data, error } = await supabase
       .from('watchlist')
-      .insert([{ symbol, name }])
+      .insert([{
+        symbol,
+        name,
+        exchange,
+        added_price: addedPrice
+      }])
       .select()
-    if (error) throw error
-    return data[0]
-  },
-
-  async remove(id) {
-    const { error } = await supabase
-      .from('watchlist')
-      .delete()
-      .eq('id', id)
-    if (error) throw error
-  }
-}
-
-// Portfolio operations
-export const portfolioApi = {
-  async getAll() {
-    const { data, error } = await supabase
-      .from('portfolio')
-      .select('*')
-      .order('created_at', { ascending: false })
+      .single()
     if (error) throw error
     return data
   },
 
-  async add(holding) {
+  async setAlert(id, alertPrice) {
     const { data, error } = await supabase
-      .from('portfolio')
-      .insert([holding])
-      .select()
-    if (error) throw error
-    return data[0]
-  },
-
-  async update(id, updates) {
-    const { data, error } = await supabase
-      .from('portfolio')
-      .update(updates)
+      .from('watchlist')
+      .update({ alert_price: alertPrice })
       .eq('id', id)
       .select()
-    if (error) throw error
-    return data[0]
-  },
-
-  async remove(id) {
-    const { error } = await supabase
-      .from('portfolio')
-      .delete()
-      .eq('id', id)
-    if (error) throw error
-  }
-}
-
-// Research notes operations
-export const researchApi = {
-  async getAll() {
-    const { data, error } = await supabase
-      .from('research_notes')
-      .select('*')
-      .order('created_at', { ascending: false })
+      .single()
     if (error) throw error
     return data
   },
 
-  async add(note) {
-    const { data, error } = await supabase
-      .from('research_notes')
-      .insert([note])
-      .select()
-    if (error) throw error
-    return data[0]
-  },
-
   async remove(id) {
     const { error } = await supabase
-      .from('research_notes')
+      .from('watchlist')
       .delete()
       .eq('id', id)
     if (error) throw error
   }
 }
+
+// Note: portfolioApi and researchApi were removed in Pass 1.
+// Portfolio: was pointing at a non-existent `portfolio` table.
+//   Will be rebuilt against `portfolios` + `portfolio_holdings` in Phase 4.
+// Research notes: feature not in the Phase 1-3 scope. Will return when needed.

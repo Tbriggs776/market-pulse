@@ -1,49 +1,179 @@
+/* ============================================================
+   Market Pulse — Base styles
+   Veritas Ridge × Institutional Patriotic
+   ============================================================ */
+
+/* Google Fonts — Cinzel (brand), Source Serif 4 (body serif),
+   Inter (sans), IBM Plex Mono (tabular figures).
+   Loaded here instead of index.html so Vite can tree-shake and
+   the fonts travel with the CSS. */
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+/* ============================================================
+   Base layer — root element styling
+   ============================================================ */
+@layer base {
+  html {
+    /* Enable OpenType tabular figures globally for numeric content */
+    font-feature-settings: 'tnum' off, 'ss01' on;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-canvas text-ivory font-sans;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  /* Headings default to the brand serif only for the big marketing h1.
+     Section headings use sans by default — opt into serif with .font-serif */
+  h1 {
+    @apply text-ivory;
+  }
+
+  h2, h3, h4, h5, h6 {
+    @apply text-ivory font-semibold;
+  }
+
+  /* Links are gold, underlined on hover */
+  a {
+    @apply text-gold transition-colors;
+  }
+  a:hover {
+    @apply text-gold-bright;
+  }
+
+  /* Tabular figures wherever .tabular-nums is applied */
+  .tabular-nums {
+    font-feature-settings: 'tnum' on, 'lnum' on;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Selection: gold on dark surface */
+  ::selection {
+    background-color: rgba(201, 169, 97, 0.3);
+    color: #F5F1E8;
+  }
+
+  /* Scrollbar styling — subtle, matches palette */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0A0A0B;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2A2A33;
+    border-radius: 5px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3A3A45;
+  }
 }
 
-body {
-  margin: 0;
-  min-height: 100vh;
-  background-color: #f8fafc;
-}
-
+/* ============================================================
+   Component layer — reusable patterns
+   ============================================================ */
 @layer components {
-  .btn-primary {
-    @apply bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors font-medium;
-  }
-
-  .btn-secondary {
-    @apply bg-gray-200 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors font-medium;
-  }
-
+  /* Card — the core surface primitive */
   .card {
-    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-6;
+    @apply bg-surface border border-border rounded-lg p-5 shadow-card;
   }
 
+  .card-elevated {
+    @apply bg-surface-elevated border border-border rounded-lg p-5 shadow-elevated;
+  }
+
+  /* Primary button — gold, the brand CTA */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md
+           bg-gold text-canvas font-medium text-sm
+           hover:bg-gold-bright transition-colors
+           focus:outline-none focus-visible:shadow-gold-focus
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Secondary button — outlined, for less emphasis */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md
+           bg-transparent border border-border text-ivory font-medium text-sm
+           hover:bg-surface-elevated hover:border-gold-dim transition-colors
+           focus:outline-none focus-visible:shadow-gold-focus
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Ghost button — minimal, for toolbar actions */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-2 rounded-md
+           text-text-secondary text-sm
+           hover:bg-surface-elevated hover:text-ivory transition-colors
+           focus:outline-none focus-visible:shadow-gold-focus;
+  }
+
+  /* Input — dark surface, gold focus */
   .input {
-    @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply w-full px-3 py-2 rounded-md
+           bg-surface border border-border text-ivory text-sm
+           placeholder:text-text-muted
+           focus:outline-none focus:border-gold-dim focus:shadow-gold-focus
+           transition-colors;
   }
 
-  .badge-green {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800;
+  /* Badge system — small pills for labels/tags */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+  .badge-gold {
+    @apply badge bg-gold/10 text-gold border border-gold/20;
+  }
+  .badge-positive {
+    @apply badge bg-positive/10 text-positive border border-positive/20;
+  }
+  .badge-crimson {
+    @apply badge bg-crimson/10 text-crimson border border-crimson/20;
+  }
+  .badge-patriot {
+    @apply badge bg-patriot/10 text-patriot-bright border border-patriot/20;
+  }
+  .badge-neutral {
+    @apply badge bg-surface-elevated text-text-secondary border border-border;
   }
 
-  .badge-red {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800;
+  /* Numeric display — tabular, for prices and percentages */
+  .num {
+    @apply font-mono tabular-nums;
+  }
+  .num-positive {
+    @apply num text-positive;
+  }
+  .num-crimson {
+    @apply num text-crimson;
   }
 
-  .badge-yellow {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800;
+  /* Section divider — thin gold line, used under page headers */
+  .gold-divider {
+    @apply h-px bg-gradient-to-r from-gold/40 via-gold/10 to-transparent;
   }
+}
 
-  .badge-blue {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800;
+/* ============================================================
+   Utility layer — one-off helpers
+   ============================================================ */
+@layer utilities {
+  /* Text wrap for long briefings */
+  .prose-briefing {
+    @apply text-ivory leading-relaxed;
+  }
+  .prose-briefing p {
+    @apply mb-3;
+  }
+  .prose-briefing strong {
+    @apply text-gold font-semibold;
   }
 }
