@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Market Pulse — API surface
  *
  * All real API calls live in src/lib/services/*.js — one file per
@@ -7,9 +7,9 @@
  */
 
 export { newsService } from './services/news'
+export { aiService } from './services/ai'
 
 // Coming soon:
 // export { marketsService } from './services/markets'
 // export { stocksService } from './services/stocks'
 // export { treasuryService } from './services/treasury'
-// export { aiService } from './services/ai'

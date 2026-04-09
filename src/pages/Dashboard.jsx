@@ -4,21 +4,14 @@ import { RefreshCw, Newspaper, MapPin, Flag, Briefcase, Globe } from 'lucide-rea
 import { newsService } from '../lib/api'
 import NewsCard from '../components/news/NewsCard'
 import NewsCardSkeleton from '../components/news/NewsCardSkeleton'
+import AIBriefing from '../components/dashboard/AIBriefing'
 
 /**
  * Dashboard
- * ────────────────────────────────────────────────────────────
- * Pass 3 scope: news-only. The full vision includes a market-movers
- * grid and an AI-generated daily briefing at the top — those land in
- * Pass 3B and 3C. Today we prove the service pattern end-to-end
- * with the lowest-risk API (NewsAPI).
- *
- * State:
- *  • activeTab: 'all' | 'local' | 'national' | 'business'
- *  • TanStack Query handles caching, refetching, loading states
- *
- * The user's state is Arizona (hardcoded for now — state selector
- * comes in Pass 3.5).
+ * ----------------------------------------------------------
+ * Pass 3 + 3B scope: news + AI briefing. Market movers come
+ * in Pass 3C. The user's state is Arizona (hardcoded for now
+ * until Pass 3.5 brings geolocation + state selector).
  */
 
 const TABS = [
@@ -30,7 +23,7 @@ const TABS = [
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('all')
-  const state = 'Arizona' // TODO Pass 3.5: pull from user profile / geolocation
+  const state = 'Arizona' // TODO Pass 3.5: user profile / geolocation
 
   const {
     data: news,
@@ -41,9 +34,6 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ['news', state],
     queryFn: () => newsService.fetchAll({ state }),
-    // News staleness: fresh for 10 minutes, cached up to 1 hour.
-    // Aggressive caching is deliberate — NewsAPI free tier is 100/day
-    // and we don't want every page visit to burn a request.
     staleTime: 10 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
     refetchOnWindowFocus: false,
@@ -57,7 +47,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
-      {/* ─── Header ─────────────────────────────────────────── */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl tracking-wide text-ivory mb-1">
@@ -85,30 +75,10 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* ─── AI Briefing placeholder ─────────────────────────── */}
-      {/* Will be replaced in Pass 3B with a Claude-generated summary
-          that digests today's news + market data. For now: a deliberate
-          placeholder that signals what's coming. */}
-      <div className="card-elevated border-gold/20">
-        <div className="flex items-start gap-3">
-          <div className="p-2 bg-gold/10 rounded-md">
-            <Newspaper className="w-5 h-5 text-gold" aria-hidden="true" />
-          </div>
-          <div className="flex-1">
-            <div className="text-xs font-medium text-gold uppercase tracking-wide mb-1">
-              AI Briefing
-            </div>
-            <p className="text-sm text-text-secondary leading-relaxed">
-              Claude-generated daily summary will appear here in the next pass.
-              It will synthesize today's top stories across local, national,
-              and business coverage with relevance to your watchlist and
-              current macro conditions.
-            </p>
-          </div>
-        </div>
-      </div>
+      {/* AI Briefing */}
+      <AIBriefing articles={news?.all || []} state={state} />
 
-      {/* ─── News section ───────────────────────────────────── */}
+      {/* News section */}
       <section>
         <div className="flex items-center justify-between mb-6">
           <h2 className="flex items-center gap-2 text-xl font-semibold text-ivory">
@@ -141,7 +111,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Error state (soft — news service never throws, but defensive) */}
+        {/* Error state */}
         {error && (
           <div className="card border-crimson/30 mb-4">
             <div className="text-crimson text-sm">
@@ -168,11 +138,6 @@ export default function Dashboard() {
                   />
                   <p className="text-text-secondary">
                     No articles in this category right now.
-                  </p>
-                  <p className="text-xs text-text-muted mt-1">
-                    NewsAPI free tier is localhost-only. If you're on a
-                    deployed URL, the news service is blocked until we move it
-                    server-side.
                   </p>
                 </div>
               )}
