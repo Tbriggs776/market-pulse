@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Watchlist from './pages/Watchlist'
+import Research from './pages/Research'
 import Login from './pages/Login'
 import { RefreshCw } from 'lucide-react'
 
@@ -19,10 +20,6 @@ function Placeholder({ name }) {
   )
 }
 
-/**
- * ProtectedRoute -- redirects to /login if not authenticated.
- * Shows a loading spinner while checking auth state.
- */
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
 
@@ -55,7 +52,7 @@ function AppRoutes() {
       >
         <Route index element={<Dashboard />} />
         <Route path="watchlist" element={<Watchlist />} />
-        <Route path="research" element={<Placeholder name="Research" />} />
+        <Route path="research" element={<Research />} />
         <Route path="government" element={<Placeholder name="Government" />} />
         <Route path="advisor" element={<Placeholder name="Advisor" />} />
       </Route>
