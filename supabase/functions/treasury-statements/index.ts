@@ -1,15 +1,9 @@
 // Supabase Edge Function: treasury-statements
 // Runtime: Deno
 //
-// Fetches data for the three federal financial statements:
-// Income Statement (revenue by source + expenses)
-// Balance Sheet (assets vs liabilities)
-// Cash Flow (Daily Treasury Statement)
-//
-// Treasury Fiscal Data API: free, no key needed
-//
-// POST /functions/v1/treasury-statements
-// Body: { statement: "income" | "balance_sheet" | "cash_flow" | "all" }
+// Fetches data for federal financial statements from Treasury APIs.
+// All values from DTS are strings representing millions of dollars.
+// MTS values are strings representing millions of dollars.
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 
@@ -22,34 +16,56 @@ const CORS_HEADERS = {
 
 const TREASURY_BASE = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service'
 
-// --- Income Statement: Revenue by source ---
+// Parse Treasury string value (in millions) to actual dollar amount
+function parseMil(val: unknown): number {
+  if (val === null || val === undefined || val === 'null' || val === '') return 0
+  const n = parseFloat(String(val))
+  return isNaN(n) ? 0 : n * 1e6 // values are in millions
+}
+
+// Parse MTS value (already in actual dollars, but as strings)
+function parseMts(val: unknown): number {
+  if (val === null || val === undefined || val === 'null' || val === '') return 0
+  const n = parseFloat(String(val))
+  return isNaN(n) ? 0 : n
+}
+
+// --- Income Statement: Revenue by source (MTS Table 4) ---
 async function fetchRevenueBySource() {
   try {
-    // MTS Table 4: receipts by source
-    const url = `${TREASURY_BASE}/v1/accounting/mts/mts_table_4?sort=-record_date&page[size]=50&fields=record_date,classification_desc,current_month_gross_rcpt_amt,current_fytd_gross_rcpt_amt,prior_fytd_gross_rcpt_amt,record_fiscal_year,record_calendar_month`
+    const url = `${TREASURY_BASE}/v1/accounting/mts/mts_table_4?sort=-record_date&page[size]=100&fields=record_date,classification_desc,current_month_gross_rcpt_amt,current_fytd_gross_rcpt_amt,prior_fytd_gross_rcpt_amt,record_fiscal_year,record_calendar_month`
     const res = await fetch(url)
-    if (!res.ok) {
-      console.warn(`[treasury-statements] revenue: ${res.status}`)
-      return null
-    }
+    if (!res.ok) return null
     const data = await res.json()
     if (!data.data || data.data.length === 0) return null
 
-    // Get the latest month's data
     const latestDate = data.data[0].record_date
     const latestMonth = data.data.filter((d: Record<string, string>) => d.record_date === latestDate)
+
+    // Filter: only show rows with real data, exclude sub-headers (ending with :)
+    // Keep Total rows and meaningful line items
+    const meaningful = latestMonth.filter((d: Record<string, string>) => {
+      const cat = d.classification_desc || ''
+      const fytd = parseMts(d.current_fytd_gross_rcpt_amt)
+      // Exclude header rows (end with colon)
+      if (cat.endsWith(':')) return false
+      // Exclude zero FYTD rows
+      if (fytd === 0) return false
+      // Exclude adjustment rows
+      if (cat.toLowerCase().includes('adjustment')) return false
+      return true
+    })
 
     return {
       date: latestDate,
       fiscalYear: data.data[0].record_fiscal_year,
       month: data.data[0].record_calendar_month,
-      sources: latestMonth.map((d: Record<string, string>) => ({
+      sources: meaningful.map((d: Record<string, string>) => ({
         category: d.classification_desc,
-        monthAmount: parseFloat(d.current_month_gross_rcpt_amt || '0'),
-        fytdAmount: parseFloat(d.current_fytd_gross_rcpt_amt || '0'),
-        priorFytd: parseFloat(d.prior_fytd_gross_rcpt_amt || '0'),
-      })).filter((s: Record<string, unknown>) => s.category && s.fytdAmount !== 0)
-        .sort((a: Record<string, number>, b: Record<string, number>) => b.fytdAmount - a.fytdAmount),
+        monthAmount: parseMts(d.current_month_gross_rcpt_amt),
+        fytdAmount: parseMts(d.current_fytd_gross_rcpt_amt),
+        priorFytd: parseMts(d.prior_fytd_gross_rcpt_amt),
+      })).sort((a: Record<string, number>, b: Record<string, number>) => Math.abs(b.fytdAmount) - Math.abs(a.fytdAmount)),
     }
   } catch (err) {
     console.warn('[treasury-statements] revenue error:', err)
@@ -57,32 +73,37 @@ async function fetchRevenueBySource() {
   }
 }
 
-// --- Income Statement: Outlays by category ---
+// --- Income Statement: Outlays by category (MTS Table 5) ---
 async function fetchOutlaysByCategory() {
   try {
-    const url = `${TREASURY_BASE}/v1/accounting/mts/mts_table_5?sort=-record_date&page[size]=50&fields=record_date,classification_desc,current_month_gross_outly_amt,current_fytd_gross_outly_amt,prior_fytd_gross_outly_amt,record_fiscal_year,record_calendar_month`
+    const url = `${TREASURY_BASE}/v1/accounting/mts/mts_table_5?sort=-record_date&page[size]=100&fields=record_date,classification_desc,current_month_gross_outly_amt,current_fytd_gross_outly_amt,prior_fytd_gross_outly_amt,record_fiscal_year,record_calendar_month`
     const res = await fetch(url)
-    if (!res.ok) {
-      console.warn(`[treasury-statements] outlays: ${res.status}`)
-      return null
-    }
+    if (!res.ok) return null
     const data = await res.json()
     if (!data.data || data.data.length === 0) return null
 
     const latestDate = data.data[0].record_date
     const latestMonth = data.data.filter((d: Record<string, string>) => d.record_date === latestDate)
 
+    const meaningful = latestMonth.filter((d: Record<string, string>) => {
+      const cat = d.classification_desc || ''
+      const fytd = parseMts(d.current_fytd_gross_outly_amt)
+      if (cat.endsWith(':')) return false
+      if (fytd === 0) return false
+      if (cat.toLowerCase().includes('adjustment')) return false
+      return true
+    })
+
     return {
       date: latestDate,
       fiscalYear: data.data[0].record_fiscal_year,
       month: data.data[0].record_calendar_month,
-      categories: latestMonth.map((d: Record<string, string>) => ({
+      categories: meaningful.map((d: Record<string, string>) => ({
         category: d.classification_desc,
-        monthAmount: parseFloat(d.current_month_gross_outly_amt || '0'),
-        fytdAmount: parseFloat(d.current_fytd_gross_outly_amt || '0'),
-        priorFytd: parseFloat(d.prior_fytd_gross_outly_amt || '0'),
-      })).filter((s: Record<string, unknown>) => s.category && s.fytdAmount !== 0)
-        .sort((a: Record<string, number>, b: Record<string, number>) => b.fytdAmount - a.fytdAmount),
+        monthAmount: parseMts(d.current_month_gross_outly_amt),
+        fytdAmount: parseMts(d.current_fytd_gross_outly_amt),
+        priorFytd: parseMts(d.prior_fytd_gross_outly_amt),
+      })).sort((a: Record<string, number>, b: Record<string, number>) => Math.abs(b.fytdAmount) - Math.abs(a.fytdAmount)),
     }
   } catch (err) {
     console.warn('[treasury-statements] outlays error:', err)
@@ -90,31 +111,40 @@ async function fetchOutlaysByCategory() {
   }
 }
 
-// --- Balance Sheet: Operating cash + debt components ---
+// --- Balance Sheet: DTS operating cash + debt ---
 async function fetchBalanceSheet() {
   try {
-    // Daily Treasury Statement: operating cash balance
-    const dtsUrl = `${TREASURY_BASE}/v1/accounting/dts/operating_cash_balance?sort=-record_date&page[size]=5&fields=record_date,account_type,open_today_bal,close_today_bal`
+    // DTS: get latest day's data (4 rows: opening, deposits, withdrawals, closing)
+    const dtsUrl = `${TREASURY_BASE}/v1/accounting/dts/operating_cash_balance?sort=-record_date&page[size]=8&fields=record_date,account_type,open_today_bal,close_today_bal`
     const dtsRes = await fetch(dtsUrl)
     let cashBalance = null
     if (dtsRes.ok) {
       const dtsData = await dtsRes.json()
       if (dtsData.data && dtsData.data.length > 0) {
-        // Find Federal Reserve Account balance
         const latestDate = dtsData.data[0].record_date
-        const latestEntries = dtsData.data.filter((d: Record<string, string>) => d.record_date === latestDate)
-        const totalEntry = latestEntries.find((d: Record<string, string>) =>
-          d.account_type?.toLowerCase().includes('federal reserve')
-        ) || latestEntries[0]
+        const latest = dtsData.data.filter((d: Record<string, string>) => d.record_date === latestDate)
+
+        // DTS uses open_today_bal for ALL values (close_today_bal is always "null")
+        // Values are in millions
+        const closing = latest.find((d: Record<string, string>) =>
+          d.account_type?.includes('Closing Balance')
+        )
+        const opening = latest.find((d: Record<string, string>) =>
+          d.account_type?.includes('Opening Balance')
+        )
+        const deposits = latest.find((d: Record<string, string>) =>
+          d.account_type?.includes('Deposits')
+        )
+        const withdrawals = latest.find((d: Record<string, string>) =>
+          d.account_type?.includes('Withdrawals')
+        )
+
         cashBalance = {
           date: latestDate,
-          openBalance: [totalEntry?.open_today_bal].flat().map(Number).find(n => !isNaN(n) && n > 0) || 0,
-          closeBalance: [totalEntry?.close_today_bal].flat().map(Number).find(n => !isNaN(n) && n > 0) || 0,
-          entries: latestEntries.map((d: Record<string, string>) => ({
-            type: d.account_type,
-            open: parseFloat(d.open_today_bal || '0'),
-            close: parseFloat(d.close_today_bal || '0'),
-          })),
+          closingBalance: parseMil(closing?.open_today_bal),
+          openingBalance: parseMil(opening?.open_today_bal),
+          totalDeposits: parseMil(deposits?.open_today_bal),
+          totalWithdrawals: parseMil(withdrawals?.open_today_bal),
         }
       }
     }
@@ -143,64 +173,46 @@ async function fetchBalanceSheet() {
   }
 }
 
-// --- Cash Flow: DTS deposits and withdrawals ---
+// --- Cash Flow: DTS deposits and withdrawals summary ---
 async function fetchCashFlow() {
   try {
-    // Deposits (receipts into Treasury)
-    const depUrl = `${TREASURY_BASE}/v1/accounting/dts/deposits_withdrawals_operating_cash?sort=-record_date&page[size]=60&fields=record_date,account_type,transaction_type,transaction_today_amt,transaction_mtd_amt,transaction_fytd_amt`
-    const depRes = await fetch(depUrl)
+    // Get summary rows from operating_cash_balance (these have the totals)
+    const summaryUrl = `${TREASURY_BASE}/v1/accounting/dts/operating_cash_balance?sort=-record_date&page[size]=40&fields=record_date,account_type,open_today_bal`
+    const summaryRes = await fetch(summaryUrl)
     let transactions = null
-    if (depRes.ok) {
-      const depData = await depRes.json()
-      if (depData.data && depData.data.length > 0) {
-        const latestDate = depData.data[0].record_date
-        const latest = depData.data.filter((d: Record<string, string>) => d.record_date === latestDate)
+    let cashTrend: Array<Record<string, unknown>> = []
 
-        const deposits = latest.filter((d: Record<string, string>) =>
-          d.transaction_type?.toLowerCase().includes('deposit')
-        )
-        const withdrawals = latest.filter((d: Record<string, string>) =>
-          d.transaction_type?.toLowerCase().includes('withdrawal')
-        )
+    if (summaryRes.ok) {
+      const summaryData = await summaryRes.json()
+      if (summaryData.data && summaryData.data.length > 0) {
+        const latestDate = summaryData.data[0].record_date
+        const latest = summaryData.data.filter((d: Record<string, string>) => d.record_date === latestDate)
 
-        const sumField = (arr: Array<Record<string, string>>, field: string) =>
-          arr.reduce((sum, d) => sum + parseFloat(d[field] || '0'), 0)
+        const getValue = (keyword: string) => {
+          const row = latest.find((d: Record<string, string>) => d.account_type?.includes(keyword))
+          return parseMil(row?.open_today_bal)
+        }
 
         transactions = {
           date: latestDate,
-          todayDeposits: sumField(deposits, 'transaction_today_amt'),
-          todayWithdrawals: sumField(withdrawals, 'transaction_today_amt'),
-          mtdDeposits: sumField(deposits, 'transaction_mtd_amt'),
-          mtdWithdrawals: sumField(withdrawals, 'transaction_mtd_amt'),
-          fytdDeposits: sumField(deposits, 'transaction_fytd_amt'),
-          fytdWithdrawals: sumField(withdrawals, 'transaction_fytd_amt'),
-          details: latest.slice(0, 20).map((d: Record<string, string>) => ({
-            type: d.account_type,
-            transactionType: d.transaction_type,
-            today: parseFloat(d.transaction_today_amt || '0'),
-            mtd: parseFloat(d.transaction_mtd_amt || '0'),
-            fytd: parseFloat(d.transaction_fytd_amt || '0'),
-          })),
+          openingBalance: getValue('Opening Balance'),
+          closingBalance: getValue('Closing Balance'),
+          todayDeposits: getValue('Deposits'),
+          todayWithdrawals: getValue('Withdrawals'),
+          netChange: getValue('Closing Balance') - getValue('Opening Balance'),
         }
-      }
-    }
 
-    // Operating cash trend (last 30 days)
-    const trendUrl = `${TREASURY_BASE}/v1/accounting/dts/operating_cash_balance?sort=-record_date&page[size]=30&fields=record_date,account_type,close_today_bal`
-    const trendRes = await fetch(trendUrl)
-    let cashTrend: Array<Record<string, unknown>> = []
-    if (trendRes.ok) {
-      const trendData = await trendRes.json()
-      if (trendData.data) {
-        // Group by date, sum close balances
-        const byDate: Record<string, number> = {}
-        for (const d of trendData.data) {
-          if (!byDate[d.record_date]) byDate[d.record_date] = 0
-          byDate[d.record_date] += parseFloat(d.close_today_bal || '0')
-        }
-        cashTrend = Object.entries(byDate)
-          .map(([date, balance]) => ({ date, balance }))
-          .sort((a, b) => a.date.localeCompare(b.date))
+        // Build cash trend from closing balances across days
+        const allDates = [...new Set(summaryData.data.map((d: Record<string, string>) => d.record_date))]
+        cashTrend = allDates.map((date) => {
+          const dayRows = summaryData.data.filter((d: Record<string, string>) => d.record_date === date)
+          const closingRow = dayRows.find((d: Record<string, string>) => d.account_type?.includes('Closing Balance'))
+          return {
+            date,
+            balance: parseMil(closingRow?.open_today_bal),
+          }
+        }).filter((d: Record<string, unknown>) => (d.balance as number) > 0)
+          .sort((a: Record<string, unknown>, b: Record<string, unknown>) => (a.date as string).localeCompare(b.date as string))
       }
     }
 
@@ -224,20 +236,13 @@ serve(async (req: Request): Promise<Response> => {
   }
 
   let body: { statement?: string }
-  try {
-    body = await req.json()
-  } catch {
-    body = {}
-  }
+  try { body = await req.json() } catch { body = {} }
 
   const statement = body.statement || 'all'
 
   try {
     if (statement === 'income') {
-      const [revenue, outlays] = await Promise.all([
-        fetchRevenueBySource(),
-        fetchOutlaysByCategory(),
-      ])
+      const [revenue, outlays] = await Promise.all([fetchRevenueBySource(), fetchOutlaysByCategory()])
       return new Response(
         JSON.stringify({ revenue, outlays, asOf: new Date().toISOString() }),
         { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } },
@@ -260,30 +265,18 @@ serve(async (req: Request): Promise<Response> => {
       )
     }
 
-    // All statements
     const [revenue, outlays, balanceSheet, cashFlow] = await Promise.all([
-      fetchRevenueBySource(),
-      fetchOutlaysByCategory(),
-      fetchBalanceSheet(),
-      fetchCashFlow(),
+      fetchRevenueBySource(), fetchOutlaysByCategory(), fetchBalanceSheet(), fetchCashFlow(),
     ])
 
     return new Response(
-      JSON.stringify({
-        revenue,
-        outlays,
-        balanceSheet,
-        cashFlow,
-        asOf: new Date().toISOString(),
-      }),
+      JSON.stringify({ revenue, outlays, balanceSheet, cashFlow, asOf: new Date().toISOString() }),
       { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } },
     )
   } catch (err) {
     console.error('[treasury-statements] failed:', err)
     return new Response(
-      JSON.stringify({
-        error: err instanceof Error ? err.message : 'Unknown error',
-      }),
+      JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }),
       { status: 502, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } },
     )
   }

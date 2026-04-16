@@ -310,7 +310,7 @@ function BalanceSheet() {
             <div className="space-y-3">
               <div className="card-elevated">
                 <div className="text-xs text-text-muted mb-1">Treasury Operating Cash</div>
-                <div className="font-mono text-2xl text-ivory">{billions(data.cashBalance.closeBalance)}</div>
+                <div className="font-mono text-2xl text-ivory">{billions(data.cashBalance.closingBalance)}</div>
                 <div className="text-[10px] text-text-muted mt-1">as of {data.cashBalance.date}</div>
               </div>
               {data.cashBalance.entries && data.cashBalance.entries.length > 1 && (
@@ -366,13 +366,13 @@ function BalanceSheet() {
             <div>
               <div className="text-xs text-text-muted mb-1">Net Position (Cash - Debt)</div>
               <div className="font-mono text-2xl text-crimson">
-                -{trillions(data.debt.totalDebt - data.cashBalance.closeBalance)}
+                -{trillions(data.debt.totalDebt - data.cashBalance.closingBalance)}
               </div>
             </div>
             <div className="text-right">
               <div className="text-xs text-text-muted mb-1">Cash-to-Debt Ratio</div>
               <div className="font-mono text-lg text-text-secondary">
-                {((data.cashBalance.closeBalance / data.debt.totalDebt) * 100).toFixed(3)}%
+                {((data.cashBalance.closingBalance / data.debt.totalDebt) * 100).toFixed(3)}%
               </div>
             </div>
           </div>
