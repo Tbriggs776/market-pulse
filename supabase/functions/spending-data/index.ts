@@ -9,19 +9,13 @@ const CORS_HEADERS = {
 
 const USA_SPENDING_BASE = 'https://api.usaspending.gov/api/v2'
 
-// Toptier agencies - GET endpoint, returns all agencies with spending data
 async function fetchTopAgencies() {
   try {
     const url = `${USA_SPENDING_BASE}/references/toptier_agencies/`
     const res = await fetch(url)
-    if (!res.ok) {
-      console.warn(`[spending] toptier_agencies: ${res.status}`)
-      return []
-    }
+    if (!res.ok) return []
     const data = await res.json()
-    const results = data.results || []
-    // Filter to agencies with meaningful spending, sort by outlays
-    return results
+    return (data.results || [])
       .filter((a: Record<string, unknown>) => (a.outlay_amount as number) > 1000000)
       .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
         ((b.outlay_amount as number) || 0) - ((a.outlay_amount as number) || 0)
@@ -45,44 +39,39 @@ async function fetchTopAgencies() {
   }
 }
 
-// Budget function spending - POST endpoint
 async function fetchBudgetFunctions() {
-  try {
-    const url = `${USA_SPENDING_BASE}/spending/`
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'budget_function',
-        filters: { fy: '2025' },
-      }),
-    })
-    if (!res.ok) {
-      console.warn(`[spending] budget_function: ${res.status}`)
-      // Try without filters
-      const res2 = await fetch(url, {
+  // Try FY2025 Q4 first, then Q3, Q2, Q1
+  const quarters = ['4', '3', '2', '1']
+  for (const q of quarters) {
+    try {
+      const url = `${USA_SPENDING_BASE}/spending/`
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'budget_function' }),
+        body: JSON.stringify({
+          type: 'budget_function',
+          filters: { fy: '2025', quarter: q },
+        }),
       })
-      if (!res2.ok) return []
-      const data2 = await res2.json()
-      return (data2.results || [])
-        .filter((b: Record<string, unknown>) => (b.amount as number) > 0)
-        .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
-          ((b.amount as number) || 0) - ((a.amount as number) || 0)
-        )
+      if (!res.ok) continue
+      const data = await res.json()
+      const results = data.results || []
+      if (results.length > 0) {
+        return {
+          total: data.total || 0,
+          endDate: data.end_date || null,
+          items: results
+            .filter((b: Record<string, unknown>) => (b.amount as number) > 0)
+            .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
+              ((b.amount as number) || 0) - ((a.amount as number) || 0)
+            ),
+        }
+      }
+    } catch {
+      continue
     }
-    const data = await res.json()
-    return (data.results || [])
-      .filter((b: Record<string, unknown>) => (b.amount as number) > 0)
-      .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
-        ((b.amount as number) || 0) - ((a.amount as number) || 0)
-      )
-  } catch (err) {
-    console.warn('[spending] budget functions error:', err)
-    return []
   }
+  return { total: 0, endDate: null, items: [] }
 }
 
 serve(async (req: Request): Promise<Response> => {
@@ -98,11 +87,7 @@ serve(async (req: Request): Promise<Response> => {
   }
 
   let body: { type?: string }
-  try {
-    body = await req.json()
-  } catch {
-    body = {}
-  }
+  try { body = await req.json() } catch { body = {} }
 
   const type = body.type || 'all'
 
@@ -116,15 +101,14 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (type === 'budget_functions') {
-      const budgetFunctions = await fetchBudgetFunctions()
+      const bf = await fetchBudgetFunctions()
       return new Response(
-        JSON.stringify({ budgetFunctions, asOf: new Date().toISOString() }),
+        JSON.stringify({ budgetFunctions: bf.items, totalSpending: bf.total, endDate: bf.endDate, asOf: new Date().toISOString() }),
         { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } },
       )
     }
 
-    // All
-    const [agencies, budgetFunctions] = await Promise.all([
+    const [agencies, bf] = await Promise.all([
       fetchTopAgencies(),
       fetchBudgetFunctions(),
     ])
@@ -132,7 +116,9 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(
       JSON.stringify({
         agencies,
-        budgetFunctions,
+        budgetFunctions: bf.items,
+        totalSpending: bf.total,
+        endDate: bf.endDate,
         fiscalYear: agencies.length > 0 ? agencies[0].fiscalYear : '2026',
         asOf: new Date().toISOString(),
       }),
@@ -141,9 +127,7 @@ serve(async (req: Request): Promise<Response> => {
   } catch (err) {
     console.error('[spending-data] failed:', err)
     return new Response(
-      JSON.stringify({
-        error: err instanceof Error ? err.message : 'Unknown error',
-      }),
+      JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }),
       { status: 502, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } },
     )
   }

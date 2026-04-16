@@ -108,8 +108,8 @@ async function fetchBalanceSheet() {
         ) || latestEntries[0]
         cashBalance = {
           date: latestDate,
-          openBalance: parseFloat(totalEntry?.open_today_bal || '0'),
-          closeBalance: parseFloat(totalEntry?.close_today_bal || '0'),
+          openBalance: [totalEntry?.open_today_bal].flat().map(Number).find(n => !isNaN(n) && n > 0) || 0,
+          closeBalance: [totalEntry?.close_today_bal].flat().map(Number).find(n => !isNaN(n) && n > 0) || 0,
           entries: latestEntries.map((d: Record<string, string>) => ({
             type: d.account_type,
             open: parseFloat(d.open_today_bal || '0'),
