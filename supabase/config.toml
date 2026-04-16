@@ -64,3 +64,25 @@ entrypoint = "./functions/treasury-data/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/treasury-data/*.html" ]
+
+[functions.spending-data]
+enabled = true
+verify_jwt = true
+import_map = "./functions/spending-data/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/spending-data/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/spending-data/*.html" ]
+
+[functions.treasury-statements]
+enabled = true
+verify_jwt = true
+import_map = "./functions/treasury-statements/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/treasury-statements/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/treasury-statements/*.html" ]

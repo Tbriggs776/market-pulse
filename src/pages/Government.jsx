@@ -1,271 +1,617 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Landmark, TrendingUp, TrendingDown, RefreshCw, AlertTriangle,
-  Sparkles, DollarSign, Scale, CreditCard, BarChart3
+  Sparkles, DollarSign, Scale, CreditCard, BarChart3,
+  LayoutDashboard, PiggyBank, Building2, FileSpreadsheet,
+  ArrowUpRight, ArrowDownRight, Receipt, Wallet, Banknote
 } from 'lucide-react'
-import { treasuryService } from '../lib/api'
+import { treasuryService, spendingService, statementsService } from '../lib/api'
+
+const GOV_TABS = [
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'statements', label: 'Financial Statements', icon: FileSpreadsheet },
+  { id: 'spending', label: 'Spending', icon: PiggyBank },
+  { id: 'departments', label: 'Departments', icon: Building2 },
+]
+
+const STMT_SUB_TABS = [
+  { id: 'income', label: 'Income Statement', icon: Receipt },
+  { id: 'balance', label: 'Balance Sheet', icon: Wallet },
+  { id: 'cashflow', label: 'Cash Flow', icon: Banknote },
+]
 
 export default function Government() {
-  const {
-    data: fiscal,
-    isLoading,
-    error,
-    isFetching,
-    refetch,
-  } = useQuery({
-    queryKey: ['treasury-data'],
-    queryFn: treasuryService.getFiscalOverview,
-    staleTime: 30 * 60 * 1000,
-    gcTime: 2 * 60 * 60 * 1000,
-    refetchOnWindowFocus: false,
-  })
-
-  function trillions(n) {
-    if (n == null) return '--'
-    return '$' + (n / 1e12).toFixed(2) + 'T'
-  }
-
-  function billions(n) {
-    if (n == null) return '--'
-    return '$' + (n / 1e9).toFixed(0) + 'B'
-  }
+  const [activeTab, setActiveTab] = useState('dashboard')
 
   return (
     <div className="space-y-8">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl tracking-wide text-ivory mb-1">
             Government & Fiscal
           </h1>
           <p className="text-sm text-text-secondary">
-            Treasury data, fiscal balance, and economic outlook
+            Federal financial statements, spending analysis, and fiscal outlook
           </p>
         </div>
-        <button
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="btn-secondary self-start"
-        >
-          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-1 p-1 bg-surface rounded-md border border-border" role="tablist">
+          {GOV_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                activeTab === tab.id ? 'bg-gold/15 text-gold-bright' : 'text-text-secondary hover:text-ivory'
+              }`}
+            >
+              <tab.icon className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{tab.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Loading */}
-      {isLoading && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="card animate-pulse">
-                <div className="h-3 bg-surface-elevated rounded w-24 mb-3" />
-                <div className="h-8 bg-surface-elevated rounded w-32" />
-              </div>
-            ))}
+      {activeTab === 'dashboard' && <GovDashboard />}
+      {activeTab === 'statements' && <FinancialStatements />}
+      {activeTab === 'spending' && <SpendingTab />}
+      {activeTab === 'departments' && <DepartmentsTab />}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════
+// Helpers
+// ════════════════════════════════════════════════════
+
+function trillions(n) { if (n == null) return '--'; return '$' + (n / 1e12).toFixed(2) + 'T' }
+function billions(n) { if (n == null) return '--'; if (Math.abs(n) >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T'; return '$' + (n / 1e9).toFixed(1) + 'B' }
+function millions(n) { if (n == null) return '--'; if (Math.abs(n) >= 1e9) return billions(n); return '$' + (n / 1e6).toFixed(0) + 'M' }
+function fmtPct(n) { if (n == null) return '--'; return (n >= 0 ? '+' : '') + n.toFixed(1) + '%' }
+
+function LoadingSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[1,2,3,4].map(i => <div key={i} className="card animate-pulse"><div className="h-3 bg-surface-elevated rounded w-20 mb-3" /><div className="h-8 bg-surface-elevated rounded w-32" /></div>)}
+      </div>
+    </div>
+  )
+}
+
+function ErrorCard({ message }) {
+  return <div className="card border-crimson/30"><div className="flex items-center gap-2 text-crimson text-sm"><AlertTriangle className="w-4 h-4 shrink-0" />{message || 'Failed to load data'}</div></div>
+}
+
+// ════════════════════════════════════════════════════
+// Dashboard Tab
+// ════════════════════════════════════════════════════
+
+function GovDashboard() {
+  const { data: fiscal, isLoading, error, isFetching, refetch } = useQuery({
+    queryKey: ['treasury-data'],
+    queryFn: treasuryService.getFiscalOverview,
+    staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+  })
+
+  if (isLoading) return <LoadingSkeleton />
+  if (error) return <ErrorCard message={error.message} />
+
+  return (
+    <div className="space-y-8">
+      <div className="flex justify-end">
+        <button onClick={() => refetch()} disabled={isFetching} className="btn-secondary">
+          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
+        </button>
+      </div>
+      {fiscal?.debt && fiscal.debt.length > 0 && fiscal?.fiscal && fiscal.fiscal.length > 0 && fiscal?.interest && fiscal.interest.length > 0 && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="card-elevated">
+            <div className="text-xs text-text-muted mb-1">Total National Debt</div>
+            <div className="font-mono text-xl text-ivory">{trillions(fiscal.debt[0].totalDebt)}</div>
+            <div className="text-[10px] text-text-muted mt-1">as of {fiscal.debt[0].date}</div>
           </div>
-          <div className="card-elevated animate-pulse">
-            <div className="space-y-3">
-              <div className="h-4 bg-surface-elevated rounded w-3/4" />
-              <div className="h-4 bg-surface-elevated rounded w-full" />
-              <div className="h-4 bg-surface-elevated rounded w-5/6" />
-            </div>
+          <div className="card-elevated">
+            <div className="text-xs text-text-muted mb-1">Latest Monthly Deficit</div>
+            <div className={`font-mono text-xl ${fiscal.fiscal[0].deficit < 0 ? 'text-crimson' : 'text-positive'}`}>{billions(Math.abs(fiscal.fiscal[0].deficit))}</div>
+            <div className="text-[10px] text-text-muted mt-1">{fiscal.fiscal[0].deficit < 0 ? 'Deficit' : 'Surplus'} - FY{fiscal.fiscal[0].fiscalYear} M{fiscal.fiscal[0].month}</div>
+          </div>
+          <div className="card-elevated">
+            <div className="text-xs text-text-muted mb-1">Monthly Interest Cost</div>
+            <div className="font-mono text-xl text-crimson">{billions(fiscal.interest[0].monthTotal)}</div>
+            <div className="text-[10px] text-text-muted mt-1">{fiscal.interest[0].date}</div>
+          </div>
+          <div className="card-elevated">
+            <div className="text-xs text-text-muted mb-1">FYTD Interest</div>
+            <div className="font-mono text-xl text-crimson">{billions(fiscal.interest[0].fytdTotal)}</div>
+            <div className="text-[10px] text-text-muted mt-1">FY{fiscal.interest[0].fiscalYear}</div>
           </div>
         </div>
       )}
-
-      {/* Error */}
-      {error && !isLoading && (
-        <div className="card border-crimson/30">
-          <div className="flex items-center gap-2 text-crimson text-sm">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            {error.message || 'Failed to load fiscal data'}
+      {fiscal?.outlook && (
+        <div className="card-elevated border-gold/20">
+          <div className="flex items-center gap-2 mb-4">
+            <Sparkles className="w-4 h-4 text-gold" />
+            <span className="text-xs font-medium text-gold uppercase tracking-wide">Fiscal & Economic Outlook</span>
           </div>
-        </div>
-      )}
-
-      {/* Content */}
-      {fiscal && !isLoading && (
-        <div className="space-y-8">
-
-          {/* Debt Snapshot */}
-          {fiscal.debt && fiscal.debt.length > 0 && (
-            <section>
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
-                <DollarSign className="w-5 h-5 text-gold" />
-                National Debt
-              </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="card-elevated">
-                  <div className="text-xs text-text-muted mb-1">Total Public Debt</div>
-                  <div className="font-mono text-2xl text-ivory">
-                    {trillions(fiscal.debt[0].totalDebt)}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1">
-                    as of {fiscal.debt[0].date}
-                  </div>
-                </div>
-                <div className="card-elevated">
-                  <div className="text-xs text-text-muted mb-1">Debt Held by Public</div>
-                  <div className="font-mono text-2xl text-ivory">
-                    {trillions(fiscal.debt[0].publicDebt)}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1">
-                    {((fiscal.debt[0].publicDebt / fiscal.debt[0].totalDebt) * 100).toFixed(1)}% of total
-                  </div>
-                </div>
-                <div className="card-elevated">
-                  <div className="text-xs text-text-muted mb-1">Intragovernmental</div>
-                  <div className="font-mono text-2xl text-ivory">
-                    {trillions(fiscal.debt[0].intragovDebt)}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1">
-                    {((fiscal.debt[0].intragovDebt / fiscal.debt[0].totalDebt) * 100).toFixed(1)}% of total
-                  </div>
-                </div>
-              </div>
-
-              {/* Debt trend chart */}
-              {fiscal.debt.length > 5 && (
-                <div className="card mt-4">
-                  <h3 className="text-xs font-medium text-text-muted uppercase tracking-wide mb-4">
-                    30-Day Debt Trend
-                  </h3>
-                  <DebtChart data={fiscal.debt} />
-                </div>
-              )}
-            </section>
-          )}
-
-          {/* Fiscal Balance */}
-          {fiscal.fiscal && fiscal.fiscal.length > 0 && (
-            <section>
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
-                <Scale className="w-5 h-5 text-gold" />
-                Monthly Fiscal Balance
-              </h2>
-              <div className="space-y-2">
-                {/* Header */}
-                <div className="grid grid-cols-5 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
-                  <div>Period</div>
-                  <div className="text-right">Receipts</div>
-                  <div className="text-right">Outlays</div>
-                  <div className="text-right">Deficit/Surplus</div>
-                  <div className="text-right">Balance</div>
-                </div>
-                {fiscal.fiscal.slice(0, 12).map((f, i) => {
-                  const isDeficit = f.deficit < 0
-                  return (
-                    <div key={i} className="card grid grid-cols-5 gap-4 items-center">
-                      <div className="text-sm text-ivory">
-                        FY{f.fiscalYear} - M{f.month}
-                      </div>
-                      <div className="text-right font-mono text-sm text-positive">
-                        {billions(f.receipts)}
-                      </div>
-                      <div className="text-right font-mono text-sm text-crimson">
-                        {billions(f.outlays)}
-                      </div>
-                      <div className={`text-right font-mono text-sm ${isDeficit ? 'text-crimson' : 'text-positive'}`}>
-                        {billions(Math.abs(f.deficit))}
-                      </div>
-                      <div className="text-right">
-                        <span className={`text-xs px-2 py-0.5 rounded ${isDeficit ? 'bg-crimson/10 text-crimson' : 'bg-positive/10 text-positive'}`}>
-                          {isDeficit ? 'Deficit' : 'Surplus'}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
-          )}
-
-          {/* Interest Expense */}
-          {fiscal.interest && fiscal.interest.length > 0 && (
-            <section>
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
-                <CreditCard className="w-5 h-5 text-gold" />
-                Interest Expense
-              </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="card-elevated">
-                  <div className="text-xs text-text-muted mb-1">Latest Monthly Interest</div>
-                  <div className="font-mono text-2xl text-crimson">
-                    {billions(fiscal.interest[0].monthTotal)}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1">
-                    {fiscal.interest[0].date}
-                  </div>
-                </div>
-                <div className="card-elevated">
-                  <div className="text-xs text-text-muted mb-1">Fiscal Year-to-Date Interest</div>
-                  <div className="font-mono text-2xl text-crimson">
-                    {billions(fiscal.interest[0].fytdTotal)}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1">
-                    FY{fiscal.interest[0].fiscalYear}
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* AI Fiscal Outlook */}
-          {fiscal.outlook && (
-            <section>
-              <div className="card-elevated border-gold/20">
-                <div className="flex items-center gap-2 mb-4">
-                  <Sparkles className="w-4 h-4 text-gold" />
-                  <span className="text-xs font-medium text-gold uppercase tracking-wide">
-                    Fiscal & Economic Outlook
-                  </span>
-                </div>
-                <div className="prose-briefing text-sm">
-                  {fiscal.outlook.split(/\n\s*\n/).map((p, i) => (
-                    <p key={i}>{p}</p>
-                  ))}
-                </div>
-                <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs text-text-muted">
-                  <span>
-                    Generated{' '}
-                    {fiscal.generatedAt
-                      ? new Date(fiscal.generatedAt).toLocaleTimeString('en-US', {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })
-                      : ''}
-                  </span>
-                  <span className="font-mono">{fiscal.model}</span>
-                </div>
-              </div>
-            </section>
-          )}
+          <div className="prose-briefing text-sm">
+            {fiscal.outlook.split(/\n\s*\n/).map((p, i) => <p key={i}>{p}</p>)}
+          </div>
+          <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs text-text-muted">
+            <span>Generated {fiscal.generatedAt ? new Date(fiscal.generatedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : ''}</span>
+            <span className="font-mono">{fiscal.model}</span>
+          </div>
         </div>
       )}
     </div>
   )
 }
 
-// ---- Debt Trend SVG Chart ----
+// ════════════════════════════════════════════════════
+// Financial Statements Tab (with sub-navigation)
+// ════════════════════════════════════════════════════
 
-function DebtChart({ data }) {
+function FinancialStatements() {
+  const [subTab, setSubTab] = useState('income')
+
+  return (
+    <div className="space-y-6">
+      {/* Sub-navigation */}
+      <div className="flex items-center gap-2 border-b border-border pb-3">
+        {STMT_SUB_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setSubTab(tab.id)}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              subTab === tab.id
+                ? 'bg-gold/15 text-gold-bright border border-gold/30'
+                : 'text-text-secondary hover:text-ivory hover:bg-surface'
+            }`}
+          >
+            <tab.icon className="w-4 h-4" aria-hidden="true" />
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === 'income' && <IncomeStatement />}
+      {subTab === 'balance' && <BalanceSheet />}
+      {subTab === 'cashflow' && <CashFlowStatement />}
+    </div>
+  )
+}
+
+// --- Income Statement ---
+function IncomeStatement() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['treasury-statements', 'income'],
+    queryFn: statementsService.getIncomeStatement,
+    staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+  })
+
+  if (isLoading) return <LoadingSkeleton />
+  if (error) return <ErrorCard message={error.message} />
+
+  const totalRevenue = data?.revenue?.sources?.reduce((s, r) => s + r.fytdAmount, 0) || 0
+  const totalOutlays = data?.outlays?.categories?.reduce((s, o) => s + o.fytdAmount, 0) || 0
+  const netIncome = totalRevenue - totalOutlays
+
+  return (
+    <div className="space-y-8">
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="card-elevated">
+          <div className="text-xs text-text-muted mb-1">FYTD Revenue</div>
+          <div className="font-mono text-2xl text-positive">{billions(totalRevenue)}</div>
+          {data?.revenue && <div className="text-[10px] text-text-muted mt-1">FY{data.revenue.fiscalYear} through M{data.revenue.month}</div>}
+        </div>
+        <div className="card-elevated">
+          <div className="text-xs text-text-muted mb-1">FYTD Outlays</div>
+          <div className="font-mono text-2xl text-crimson">{billions(totalOutlays)}</div>
+        </div>
+        <div className="card-elevated">
+          <div className="text-xs text-text-muted mb-1">Net Income (Loss)</div>
+          <div className={`font-mono text-2xl ${netIncome >= 0 ? 'text-positive' : 'text-crimson'}`}>{billions(Math.abs(netIncome))}</div>
+          <div className="text-[10px] text-text-muted mt-1">{netIncome >= 0 ? 'Surplus' : 'Deficit'}</div>
+        </div>
+      </div>
+
+      {/* Revenue by Source */}
+      {data?.revenue?.sources && data.revenue.sources.length > 0 && (
+        <section>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
+            <ArrowUpRight className="w-5 h-5 text-positive" />
+            Revenue by Source
+          </h2>
+          <div className="space-y-2">
+            <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
+              <div className="col-span-5">Source</div>
+              <div className="col-span-2 text-right">This Month</div>
+              <div className="col-span-2 text-right">FYTD</div>
+              <div className="col-span-2 text-right">Prior FYTD</div>
+              <div className="col-span-1 text-right">YoY</div>
+            </div>
+            {data.revenue.sources.map((s, i) => {
+              const yoy = s.priorFytd > 0 ? ((s.fytdAmount - s.priorFytd) / s.priorFytd) * 100 : null
+              return (
+                <div key={i} className="card grid grid-cols-12 gap-4 items-center">
+                  <div className="col-span-5 text-sm text-ivory">{s.category}</div>
+                  <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{millions(s.monthAmount)}</div>
+                  <div className="col-span-2 text-right font-mono text-sm text-ivory">{billions(s.fytdAmount)}</div>
+                  <div className="col-span-2 text-right font-mono text-sm text-text-muted">{billions(s.priorFytd)}</div>
+                  <div className="col-span-1 text-right">
+                    {yoy != null ? <span className={`font-mono text-xs ${yoy >= 0 ? 'text-positive' : 'text-crimson'}`}>{fmtPct(yoy)}</span> : <span className="text-text-muted">--</span>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Outlays by Category */}
+      {data?.outlays?.categories && data.outlays.categories.length > 0 && (
+        <section>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
+            <ArrowDownRight className="w-5 h-5 text-crimson" />
+            Outlays by Category
+          </h2>
+          <div className="space-y-2">
+            <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
+              <div className="col-span-5">Category</div>
+              <div className="col-span-2 text-right">This Month</div>
+              <div className="col-span-2 text-right">FYTD</div>
+              <div className="col-span-2 text-right">Prior FYTD</div>
+              <div className="col-span-1 text-right">YoY</div>
+            </div>
+            {data.outlays.categories.map((o, i) => {
+              const yoy = o.priorFytd > 0 ? ((o.fytdAmount - o.priorFytd) / o.priorFytd) * 100 : null
+              return (
+                <div key={i} className="card grid grid-cols-12 gap-4 items-center">
+                  <div className="col-span-5 text-sm text-ivory">{o.category}</div>
+                  <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{millions(o.monthAmount)}</div>
+                  <div className="col-span-2 text-right font-mono text-sm text-ivory">{billions(o.fytdAmount)}</div>
+                  <div className="col-span-2 text-right font-mono text-sm text-text-muted">{billions(o.priorFytd)}</div>
+                  <div className="col-span-1 text-right">
+                    {yoy != null ? <span className={`font-mono text-xs ${yoy >= 0 ? 'text-crimson' : 'text-positive'}`}>{fmtPct(yoy)}</span> : <span className="text-text-muted">--</span>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}
+
+// --- Balance Sheet ---
+function BalanceSheet() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['treasury-statements', 'balance_sheet'],
+    queryFn: statementsService.getBalanceSheet,
+    staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+  })
+
+  if (isLoading) return <LoadingSkeleton />
+  if (error) return <ErrorCard message={error.message} />
+
+  return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Assets side */}
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-positive mb-4">
+            <ArrowUpRight className="w-5 h-5" />
+            Assets
+          </h2>
+          {data?.cashBalance && (
+            <div className="space-y-3">
+              <div className="card-elevated">
+                <div className="text-xs text-text-muted mb-1">Treasury Operating Cash</div>
+                <div className="font-mono text-2xl text-ivory">{billions(data.cashBalance.closeBalance)}</div>
+                <div className="text-[10px] text-text-muted mt-1">as of {data.cashBalance.date}</div>
+              </div>
+              {data.cashBalance.entries && data.cashBalance.entries.length > 1 && (
+                <div className="space-y-1">
+                  {data.cashBalance.entries.map((e, i) => (
+                    <div key={i} className="card flex items-center justify-between">
+                      <span className="text-xs text-text-secondary">{e.type}</span>
+                      <span className="font-mono text-sm text-ivory">{billions(e.close)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {!data?.cashBalance && (
+            <div className="card text-sm text-text-muted">Cash balance data unavailable</div>
+          )}
+        </div>
+
+        {/* Liabilities side */}
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-crimson mb-4">
+            <ArrowDownRight className="w-5 h-5" />
+            Liabilities
+          </h2>
+          {data?.debt && (
+            <div className="space-y-3">
+              <div className="card-elevated">
+                <div className="text-xs text-text-muted mb-1">Total Public Debt Outstanding</div>
+                <div className="font-mono text-2xl text-ivory">{trillions(data.debt.totalDebt)}</div>
+                <div className="text-[10px] text-text-muted mt-1">as of {data.debt.date}</div>
+              </div>
+              <div className="card flex items-center justify-between">
+                <span className="text-xs text-text-secondary">Debt Held by Public</span>
+                <span className="font-mono text-sm text-ivory">{trillions(data.debt.publicDebt)}</span>
+              </div>
+              <div className="card flex items-center justify-between">
+                <span className="text-xs text-text-secondary">Intragovernmental Holdings</span>
+                <span className="font-mono text-sm text-ivory">{trillions(data.debt.intragovDebt)}</span>
+              </div>
+            </div>
+          )}
+          {!data?.debt && (
+            <div className="card text-sm text-text-muted">Debt data unavailable</div>
+          )}
+        </div>
+      </div>
+
+      {/* Net Position */}
+      {data?.cashBalance && data?.debt && (
+        <div className="card-elevated border-crimson/30">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs text-text-muted mb-1">Net Position (Cash - Debt)</div>
+              <div className="font-mono text-2xl text-crimson">
+                -{trillions(data.debt.totalDebt - data.cashBalance.closeBalance)}
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-xs text-text-muted mb-1">Cash-to-Debt Ratio</div>
+              <div className="font-mono text-lg text-text-secondary">
+                {((data.cashBalance.closeBalance / data.debt.totalDebt) * 100).toFixed(3)}%
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- Cash Flow Statement ---
+function CashFlowStatement() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['treasury-statements', 'cash_flow'],
+    queryFn: statementsService.getCashFlow,
+    staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+  })
+
+  if (isLoading) return <LoadingSkeleton />
+  if (error) return <ErrorCard message={error.message} />
+
+  const txn = data?.transactions
+
+  return (
+    <div className="space-y-8">
+      {/* Summary cards */}
+      {txn && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="card-elevated">
+              <div className="text-xs text-text-muted mb-1">Today's Deposits</div>
+              <div className="font-mono text-xl text-positive">{billions(txn.todayDeposits)}</div>
+              <div className="text-[10px] text-text-muted mt-1">{txn.date}</div>
+            </div>
+            <div className="card-elevated">
+              <div className="text-xs text-text-muted mb-1">Today's Withdrawals</div>
+              <div className="font-mono text-xl text-crimson">{billions(txn.todayWithdrawals)}</div>
+            </div>
+            <div className="card-elevated">
+              <div className="text-xs text-text-muted mb-1">Net Cash Flow (Today)</div>
+              <div className={`font-mono text-xl ${(txn.todayDeposits - txn.todayWithdrawals) >= 0 ? 'text-positive' : 'text-crimson'}`}>
+                {billions(Math.abs(txn.todayDeposits - txn.todayWithdrawals))}
+              </div>
+              <div className="text-[10px] text-text-muted mt-1">
+                {(txn.todayDeposits - txn.todayWithdrawals) >= 0 ? 'Net inflow' : 'Net outflow'}
+              </div>
+            </div>
+          </div>
+
+          {/* MTD and FYTD */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="card">
+              <h3 className="text-xs font-medium text-text-muted uppercase tracking-wide mb-3">Month-to-Date</h3>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text-secondary">Deposits</span>
+                  <span className="font-mono text-sm text-positive">{billions(txn.mtdDeposits)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text-secondary">Withdrawals</span>
+                  <span className="font-mono text-sm text-crimson">{billions(txn.mtdWithdrawals)}</span>
+                </div>
+                <div className="pt-2 border-t border-border flex items-center justify-between">
+                  <span className="text-sm text-ivory font-medium">Net</span>
+                  <span className={`font-mono text-sm font-medium ${(txn.mtdDeposits - txn.mtdWithdrawals) >= 0 ? 'text-positive' : 'text-crimson'}`}>
+                    {billions(Math.abs(txn.mtdDeposits - txn.mtdWithdrawals))}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="card">
+              <h3 className="text-xs font-medium text-text-muted uppercase tracking-wide mb-3">Fiscal Year-to-Date</h3>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text-secondary">Deposits</span>
+                  <span className="font-mono text-sm text-positive">{billions(txn.fytdDeposits)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text-secondary">Withdrawals</span>
+                  <span className="font-mono text-sm text-crimson">{billions(txn.fytdWithdrawals)}</span>
+                </div>
+                <div className="pt-2 border-t border-border flex items-center justify-between">
+                  <span className="text-sm text-ivory font-medium">Net</span>
+                  <span className={`font-mono text-sm font-medium ${(txn.fytdDeposits - txn.fytdWithdrawals) >= 0 ? 'text-positive' : 'text-crimson'}`}>
+                    {billions(Math.abs(txn.fytdDeposits - txn.fytdWithdrawals))}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cash trend chart */}
+      {data?.cashTrend && data.cashTrend.length > 2 && (
+        <section>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
+            <Banknote className="w-5 h-5 text-gold" />
+            Treasury Cash Balance (30 Days)
+          </h2>
+          <div className="card">
+            <CashChart data={data.cashTrend} />
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════
+// Spending Tab
+// ════════════════════════════════════════════════════
+
+function SpendingTab() {
+  const { data: spending, isLoading, error, isFetching, refetch } = useQuery({
+    queryKey: ['spending-data'],
+    queryFn: spendingService.getSpendingOverview,
+    staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+  })
+
+  if (isLoading) return <LoadingSkeleton />
+  if (error) return <ErrorCard message={error.message} />
+
+  const totalSpending = (spending?.budgetFunctions || []).reduce((sum, b) => sum + (b.amount || 0), 0)
+
+  return (
+    <div className="space-y-8">
+      <div className="flex justify-end">
+        <button onClick={() => refetch()} disabled={isFetching} className="btn-secondary">
+          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
+        </button>
+      </div>
+      {totalSpending > 0 && (
+        <div className="card-elevated">
+          <div className="text-xs text-text-muted mb-1">Total Federal Spending (FY{spending?.fiscalYear})</div>
+          <div className="font-mono text-3xl text-ivory">{trillions(totalSpending)}</div>
+        </div>
+      )}
+      {spending?.budgetFunctions && spending.budgetFunctions.length > 0 && (
+        <section>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
+            <PiggyBank className="w-5 h-5 text-gold" /> Spending by Budget Function
+          </h2>
+          <div className="space-y-2">
+            <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
+              <div className="col-span-5">Function</div>
+              <div className="col-span-3 text-right">Amount</div>
+              <div className="col-span-2 text-right">% of Total</div>
+              <div className="col-span-2 text-right">YoY Change</div>
+            </div>
+            {spending.budgetFunctions.map((b, i) => {
+              const pct = totalSpending > 0 ? (b.amount / totalSpending) * 100 : 0
+              return (
+                <div key={i} className="card grid grid-cols-12 gap-4 items-center hover:border-gold-dim transition-colors">
+                  <div className="col-span-5">
+                    <div className="text-sm text-ivory">{b.name}</div>
+                    <div className="mt-1.5 h-1.5 bg-surface-elevated rounded-full overflow-hidden">
+                      <div className="h-full bg-gold/40 rounded-full" style={{ width: `${Math.min(pct * 3, 100)}%` }} />
+                    </div>
+                  </div>
+                  <div className="col-span-3 text-right font-mono text-sm text-ivory">{billions(b.amount)}</div>
+                  <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{pct.toFixed(1)}%</div>
+                  <div className="col-span-2 text-right">
+                    {b.yoyChange != null ? <span className={`font-mono text-sm ${b.yoyChange >= 0 ? 'text-crimson' : 'text-positive'}`}>{fmtPct(b.yoyChange)}</span> : <span className="text-text-muted text-sm">--</span>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════
+// Departments Tab
+// ════════════════════════════════════════════════════
+
+function DepartmentsTab() {
+  const { data: spending, isLoading, error } = useQuery({
+    queryKey: ['spending-data'],
+    queryFn: spendingService.getSpendingOverview,
+    staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+  })
+
+  if (isLoading) return <LoadingSkeleton />
+  if (error) return <ErrorCard message={error.message} />
+
+  return (
+    <div className="space-y-8">
+      {spending?.agencies && spending.agencies.length > 0 && (
+        <section>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
+            <Building2 className="w-5 h-5 text-gold" /> Top Federal Agencies by Spending
+          </h2>
+          <p className="text-sm text-text-secondary mb-4">FY{spending.fiscalYear} obligations. Expandable sub-agency detail coming in Pass 6C.</p>
+          <div className="space-y-2">
+            <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
+              <div className="col-span-5">Agency</div>
+              <div className="col-span-3 text-right">Obligations</div>
+              <div className="col-span-2 text-right">% of Budget</div>
+              <div className="col-span-2 text-right">YoY Change</div>
+            </div>
+            {spending.agencies.map((a, i) => (
+              <div key={i} className="card grid grid-cols-12 gap-4 items-center hover:border-gold-dim transition-colors">
+                <div className="col-span-5">
+                  <div className="text-sm text-ivory">{a.name}</div>
+                  {a.abbreviation && <div className="text-[10px] text-text-muted font-mono">{a.abbreviation}</div>}
+                </div>
+                <div className="col-span-3 text-right font-mono text-sm text-ivory">{billions(a.obligated)}</div>
+                <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{a.percentage != null ? (a.percentage * 100).toFixed(1) + '%' : '--'}</div>
+                <div className="col-span-2 text-right">
+                  {a.yoyChange != null ? <span className={`font-mono text-sm ${a.yoyChange >= 0 ? 'text-crimson' : 'text-positive'}`}>{fmtPct(a.yoyChange)}</span> : <span className="text-text-muted text-sm">--</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════
+// Cash Balance Chart
+// ════════════════════════════════════════════════════
+
+function CashChart({ data }) {
   if (!data || data.length < 2) return null
-
-  const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date))
-  const values = sorted.map((d) => d.totalDebt)
+  const values = data.map((d) => d.balance)
   const min = Math.min(...values)
   const max = Math.max(...values)
   const range = max - min || 1
+  const width = 700, height = 180, padding = 40
+  const chartW = width - padding * 2, chartH = height - padding * 2
 
-  const width = 700
-  const height = 180
-  const padding = 40
-  const chartW = width - padding * 2
-  const chartH = height - padding * 2
-
-  const points = sorted.map((d, i) => {
-    const x = padding + (i / (sorted.length - 1)) * chartW
-    const y = padding + chartH - ((d.totalDebt - min) / range) * chartH
+  const points = data.map((d, i) => {
+    const x = padding + (i / (data.length - 1)) * chartW
+    const y = padding + chartH - ((d.balance - min) / range) * chartH
     return `${x},${y}`
   }).join(' ')
 
@@ -277,16 +623,14 @@ function DebtChart({ data }) {
         return (
           <g key={pct}>
             <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="var(--color-border, #2A2A33)" strokeWidth="1" />
-            <text x={padding - 5} y={y + 3} textAnchor="end" fontSize="8" fill="var(--color-text-muted, #5A5E66)">
-              ${(val / 1e12).toFixed(1)}T
-            </text>
+            <text x={padding - 5} y={y + 3} textAnchor="end" fontSize="8" fill="var(--color-text-muted, #5A5E66)">${(val / 1e9).toFixed(0)}B</text>
           </g>
         )
       })}
-      <polyline points={points} fill="none" stroke="#B22234" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      {sorted.filter((_, i) => i === 0 || i === sorted.length - 1).map((d, idx) => {
-        const i = idx === 0 ? 0 : sorted.length - 1
-        const x = padding + (i / (sorted.length - 1)) * chartW
+      <polyline points={points} fill="none" stroke="#C9A961" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      {data.filter((_, i) => i === 0 || i === data.length - 1).map((d, idx) => {
+        const i = idx === 0 ? 0 : data.length - 1
+        const x = padding + (i / (data.length - 1)) * chartW
         return (
           <text key={d.date} x={x} y={height - 5} textAnchor="middle" fontSize="8" fill="var(--color-text-muted, #5A5E66)">
             {new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
