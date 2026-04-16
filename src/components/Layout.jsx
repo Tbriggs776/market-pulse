@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import GuestRibbon from './GuestRibbon'
+import StatePicker from './StatePicker'
 
 const NAV_ITEMS_AUTHED = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -79,12 +80,7 @@ export default function Layout() {
           </nav>
 
           <div className="flex items-center gap-3">
-            {!isAnonymous && (
-              <div className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full border border-border text-xs text-text-secondary">
-                <MapPin className="w-3 h-3" aria-hidden="true" />
-                <span>{userState}</span>
-              </div>
-            )}
+            <div className="hidden sm:block"><StatePicker /></div>
 
             {isAnonymous ? (
               <Link to="/login" className="btn-primary text-xs px-3 py-1.5 inline-flex items-center gap-1.5">
