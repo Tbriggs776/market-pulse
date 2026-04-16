@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
+import { Link } from 'react-router-dom'
 import {
   Bot, Plus, Trash2, Send, Sparkles, Brain,
   MessageSquare, Loader2, AlertTriangle, Wrench,
-  ChevronDown, ChevronRight, Check, X,
+  ChevronDown, ChevronRight, Check, X, LogIn, Info,
 } from 'lucide-react'
 import { advisorService } from '../lib/api'
+import { useAuth } from '../contexts/AuthContext'
+import { useAnonymousStore } from '../contexts/AnonymousStoreContext'
 
 const MODELS = [
   { key: 'sonnet', label: 'Sonnet', icon: Brain, desc: 'Fast, capable (default)' },
@@ -41,6 +44,236 @@ function toolInputSummary(name, input) {
 }
 
 export default function Advisor() {
+  const { isAnonymous } = useAuth()
+  return isAnonymous ? <AdvisorAnonymous /> : <AdvisorAuthenticated />
+}
+
+// ============================================================
+// ANONYMOUS MODE: React state only, no DB, no sidebar
+// ============================================================
+function AdvisorAnonymous() {
+  const { watchlist } = useAnonymousStore()
+  const [messages, setMessages] = useState([]) // { role, content }
+  const [modelKey, setModelKey] = useState('sonnet')
+  const [input, setInput] = useState('')
+  const [streaming, setStreaming] = useState(false)
+  const [streamBuffer, setStreamBuffer] = useState('')
+  const [streamToolEvents, setStreamToolEvents] = useState([])
+  const [error, setError] = useState(null)
+  const scrollRef = useRef(null)
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [messages.length, streamBuffer, streamToolEvents.length])
+
+  const handleSend = useCallback(async () => {
+    const text = input.trim()
+    if (!text || streaming) return
+
+    setError(null)
+    setStreaming(true)
+    setStreamBuffer('')
+    setStreamToolEvents([])
+    setInput('')
+
+    const userMsg = { role: 'user', content: text }
+    setMessages((prev) => [...prev, userMsg])
+
+    const priorMessages = messages.map((m) => ({ role: m.role, content: m.content }))
+    const anonymousWatchlist = watchlist.map((w) => ({
+      symbol: w.symbol,
+      name: w.name,
+      added_price: w.added_price,
+    }))
+
+    let fullAssistantText = ''
+
+    try {
+      await advisorService.sendMessage({
+        userMessage: text,
+        modelKey,
+        anonymous: true,
+        anonymousWatchlist,
+        priorMessages,
+        onDelta: (chunk) => {
+          fullAssistantText += chunk
+          setStreamBuffer((prev) => prev + chunk)
+        },
+        onToolCall: (evt) => setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'call' }]),
+        onToolResult: (evt) => setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'result' }]),
+        onError: (msg) => setError(msg),
+      })
+      if (fullAssistantText) {
+        setMessages((prev) => [...prev, { role: 'assistant', content: fullAssistantText }])
+      }
+      setStreamBuffer('')
+      setStreamToolEvents([])
+    } catch (err) {
+      setError(err.message || 'Send failed')
+      setStreamBuffer('')
+      setStreamToolEvents([])
+    } finally {
+      setStreaming(false)
+    }
+  }, [input, streaming, modelKey, messages, watchlist])
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  const toolChips = (() => {
+    const map = new Map()
+    for (const e of streamToolEvents) {
+      const existing = map.get(e.id) || { id: e.id, name: e.name, input: e.input, status: 'running' }
+      if (e.kind === 'result') {
+        existing.status = e.status || 'ok'
+        existing.summary = e.summary
+      }
+      map.set(e.id, existing)
+    }
+    return [...map.values()]
+  })()
+
+  return (
+    <div className="flex flex-col gap-4 h-[calc(100vh-180px)] min-h-[500px]">
+      {/* Ephemeral-conversation banner */}
+      <div className="card border-gold-dim bg-gold/5 py-2.5">
+        <div className="flex items-start gap-2.5">
+          <Info className="w-4 h-4 text-gold shrink-0 mt-0.5" />
+          <div className="flex-1 text-xs text-text-secondary leading-relaxed">
+            <span className="text-ivory font-medium">This conversation won't be saved.</span>
+            <span className="text-text-muted"> Refresh the page and it's gone. </span>
+            <Link to="/login" className="text-gold hover:text-gold-bright font-medium">
+              Sign in to keep your conversations →
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      <section className="card-elevated flex flex-col overflow-hidden flex-1">
+        <div className="flex items-center justify-between p-3 border-b border-border">
+          <div className="flex items-center gap-2 min-w-0">
+            <Bot className="w-4 h-4 text-gold shrink-0" />
+            <h1 className="text-sm font-medium text-ivory">Market Pulse Advisor</h1>
+            <span className="text-[10px] text-text-muted ml-2">guest session</span>
+          </div>
+          <div className="flex items-center gap-1 bg-surface rounded-md border border-border p-0.5">
+            {MODELS.map((m) => (
+              <button
+                key={m.key}
+                onClick={() => setModelKey(m.key)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] transition-colors ${modelKey === m.key ? 'bg-gold/15 text-gold-bright' : 'text-text-secondary hover:text-ivory'}`}
+                title={m.desc}
+              >
+                <m.icon className="w-3 h-3" />
+                <span>{m.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-5">
+          {messages.length === 0 && !streamBuffer && (
+            <div className="flex flex-col items-center justify-center h-full text-center p-6">
+              <div className="w-12 h-12 rounded-full bg-gold/10 border border-gold-dim flex items-center justify-center mb-4">
+                <Sparkles className="w-5 h-5 text-gold" />
+              </div>
+              <h3 className="font-serif text-xl text-ivory mb-2">Market Pulse Advisor</h3>
+              <p className="text-sm text-text-secondary max-w-sm mb-6">
+                Portfolio-aware research with live market tools. Try a question below.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-md">
+                {[
+                  'Pull a research dossier on NVDA',
+                  "What's the 10Y yield telling us right now?",
+                  "What's in business news today that matters for markets?",
+                  'Walk me through the fiscal picture',
+                ].map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => { setInput(q); inputRef.current?.focus() }}
+                    className="text-left text-xs text-text-secondary hover:text-ivory hover:bg-surface p-2.5 rounded border border-border transition-colors"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+              {watchlist.length === 0 && (
+                <p className="text-[11px] text-text-muted mt-6 max-w-sm">
+                  <Link to="/watchlist" className="text-gold hover:text-gold-bright">Add tickers to your session watchlist</Link> to get portfolio-aware answers.
+                </p>
+              )}
+            </div>
+          )}
+
+          {messages.map((m, i) => <MessageBubble key={i} role={m.role} content={m.content} />)}
+
+          {streaming && toolChips.length > 0 && (
+            <div className="flex gap-3">
+              <div className="shrink-0 w-7" />
+              <div className="flex flex-col gap-1.5">
+                {toolChips.map((t) => <ToolChip key={t.id} tool={t} />)}
+              </div>
+            </div>
+          )}
+
+          {streaming && streamBuffer && <MessageBubble role="assistant" content={streamBuffer} streaming />}
+
+          {streaming && !streamBuffer && toolChips.length === 0 && (
+            <div className="flex items-center gap-2 text-text-muted text-xs">
+              <Loader2 className="w-3 h-3 animate-spin text-gold" />
+              <span>Thinking...</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="card border-crimson/30 bg-crimson/5">
+              <div className="flex items-center gap-2 text-crimson text-sm">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border p-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={streaming ? 'Streaming...' : 'Ask the advisor anything.'}
+              disabled={streaming}
+              rows={2}
+              className="input flex-1 resize-none text-sm"
+            />
+            <button
+              onClick={handleSend}
+              disabled={!input.trim() || streaming}
+              className="btn-primary px-4 py-2.5 shrink-0"
+            >
+              {streaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </button>
+          </div>
+          <div className="flex items-center justify-between mt-2 text-[10px] text-text-muted">
+            <span>{modelKey === 'opus' ? 'Opus 4.7 -- deeper reasoning' : 'Sonnet 4.6 -- fast default'}</span>
+            <span>{watchlist.length > 0 ? `${watchlist.length} tickers in session watchlist` : 'No portfolio context'}</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+// ============================================================
+// AUTHENTICATED MODE: full sidebar + DB persistence (original 7B)
+// ============================================================
+function AdvisorAuthenticated() {
   const queryClient = useQueryClient()
   const [activeId, setActiveId] = useState(null)
   const [modelKey, setModelKey] = useState('sonnet')
@@ -69,9 +302,7 @@ export default function Advisor() {
   const messages = activeConvQ.data?.messages || []
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages.length, streamBuffer, streamToolEvents.length])
 
   const handleNewConversation = () => {
@@ -121,29 +352,20 @@ export default function Advisor() {
         conversationId: activeId,
         userMessage: text,
         modelKey,
+        anonymous: false,
         onMeta: ({ conversationId }) => {
           if (!activeId && conversationId) {
             setActiveId(conversationId)
             convId = conversationId
           }
         },
-        onDelta: (chunk) => {
-          setStreamBuffer((prev) => prev + chunk)
-        },
-        onToolCall: (evt) => {
-          setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'call' }])
-        },
-        onToolResult: (evt) => {
-          setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'result' }])
-        },
-        onError: (msg) => {
-          setError(msg)
-        },
+        onDelta: (chunk) => setStreamBuffer((prev) => prev + chunk),
+        onToolCall: (evt) => setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'call' }]),
+        onToolResult: (evt) => setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'result' }]),
+        onError: (msg) => setError(msg),
       })
       queryClient.invalidateQueries({ queryKey: ['advisor-conversations'] })
-      if (convId) {
-        queryClient.invalidateQueries({ queryKey: ['advisor-conversation', convId] })
-      }
+      if (convId) queryClient.invalidateQueries({ queryKey: ['advisor-conversation', convId] })
       setStreamBuffer('')
       setStreamToolEvents([])
     } catch (err) {
@@ -162,7 +384,6 @@ export default function Advisor() {
     }
   }
 
-  // Group tool_call + tool_result events by id so we render one chip each
   const toolChips = (() => {
     const map = new Map()
     for (const e of streamToolEvents) {
@@ -178,7 +399,6 @@ export default function Advisor() {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4 h-[calc(100vh-180px)] min-h-[500px]">
-      {/* Sidebar */}
       <aside className="card-elevated flex flex-col overflow-hidden">
         <div className="flex items-center justify-between p-3 border-b border-border">
           <h2 className="text-sm font-medium text-ivory flex items-center gap-2">
@@ -190,14 +410,10 @@ export default function Advisor() {
           </button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {convsQ.isLoading && (
-            <div className="flex items-center justify-center p-6">
-              <Loader2 className="w-4 h-4 text-gold animate-spin" />
-            </div>
-          )}
+          {convsQ.isLoading && <div className="flex items-center justify-center p-6"><Loader2 className="w-4 h-4 text-gold animate-spin" /></div>}
           {convsQ.error && <div className="p-3 text-xs text-crimson">{convsQ.error.message}</div>}
           {!convsQ.isLoading && conversations.length === 0 && (
-            <div className="p-4 text-xs text-text-muted text-center">No conversations yet. Start one below.</div>
+            <div className="p-4 text-xs text-text-muted text-center">No conversations yet.</div>
           )}
           {conversations.map((c) => {
             const isActive = c.id === activeId
@@ -212,11 +428,7 @@ export default function Advisor() {
                     <div className={`text-xs truncate ${isActive ? 'text-gold' : 'text-ivory'}`}>{c.title}</div>
                     <div className="text-[10px] text-text-muted mt-0.5">{formatTime(c.updated_at)}</div>
                   </div>
-                  <button
-                    onClick={(e) => handleDelete(c.id, e)}
-                    className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-crimson transition-opacity p-1"
-                    title="Delete"
-                  >
+                  <button onClick={(e) => handleDelete(c.id, e)} className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-crimson transition-opacity p-1" title="Delete">
                     <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
@@ -226,7 +438,6 @@ export default function Advisor() {
         </div>
       </aside>
 
-      {/* Main chat */}
       <section className="card-elevated flex flex-col overflow-hidden">
         <div className="flex items-center justify-between p-3 border-b border-border">
           <div className="flex items-center gap-2 min-w-0">
@@ -258,7 +469,7 @@ export default function Advisor() {
               </div>
               <h3 className="font-serif text-xl text-ivory mb-2">Market Pulse Advisor</h3>
               <p className="text-sm text-text-secondary max-w-sm mb-6">
-                Portfolio-aware research with live market tools. Claude can fetch quotes, run research dossiers, pull macro data, and search news mid-conversation.
+                Portfolio-aware research with live market tools.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-md">
                 {[
@@ -279,9 +490,7 @@ export default function Advisor() {
             </div>
           )}
 
-          {messages.map((m) => (
-            <MessageBubble key={m.id} role={m.role} content={m.content} />
-          ))}
+          {messages.map((m) => <MessageBubble key={m.id} role={m.role} content={m.content} />)}
 
           {streaming && toolChips.length > 0 && (
             <div className="flex gap-3">
@@ -292,9 +501,7 @@ export default function Advisor() {
             </div>
           )}
 
-          {streaming && streamBuffer && (
-            <MessageBubble role="assistant" content={streamBuffer} streaming />
-          )}
+          {streaming && streamBuffer && <MessageBubble role="assistant" content={streamBuffer} streaming />}
 
           {streaming && !streamBuffer && toolChips.length === 0 && (
             <div className="flex items-center gap-2 text-text-muted text-xs">
@@ -320,7 +527,7 @@ export default function Advisor() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={streaming ? 'Streaming...' : 'Ask the advisor anything. Claude can fetch live quotes, research tickers, check macro, search news.'}
+              placeholder={streaming ? 'Streaming...' : 'Ask the advisor anything.'}
               disabled={streaming}
               rows={2}
               className="input flex-1 resize-none text-sm"
@@ -329,13 +536,12 @@ export default function Advisor() {
               onClick={handleSend}
               disabled={!input.trim() || streaming}
               className="btn-primary px-4 py-2.5 shrink-0"
-              title="Send (Enter)"
             >
               {streaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
           <div className="flex items-center justify-between mt-2 text-[10px] text-text-muted">
-            <span>{modelKey === 'opus' ? 'Opus 4.7 -- deeper reasoning, slower' : 'Sonnet 4.6 -- fast default'}</span>
+            <span>{modelKey === 'opus' ? 'Opus 4.7 -- deeper reasoning' : 'Sonnet 4.6 -- fast default'}</span>
             <span>Enter to send -- Shift+Enter for newline</span>
           </div>
         </div>
@@ -348,8 +554,7 @@ function ToolChip({ tool }) {
   const [expanded, setExpanded] = useState(false)
   const running = tool.status === 'running'
   const isErr = tool.status === 'error'
-  const icon = running ? Loader2 : (isErr ? X : Check)
-  const IconEl = icon
+  const IconEl = running ? Loader2 : (isErr ? X : Check)
   const colorClass = running ? 'text-gold' : (isErr ? 'text-crimson' : 'text-positive')
   const label = TOOL_LABELS[tool.name] || tool.name
   const inputText = toolInputSummary(tool.name, tool.input)
@@ -363,12 +568,8 @@ function ToolChip({ tool }) {
       <span className="text-ivory">{label}</span>
       {inputText && <span className="text-text-muted font-mono">{inputText}</span>}
       <IconEl className={`w-3 h-3 shrink-0 ${colorClass} ${running ? 'animate-spin' : ''}`} />
-      {tool.summary && expanded && (
-        <span className="text-text-muted font-mono ml-1">-- {tool.summary}</span>
-      )}
-      {tool.summary && !expanded && (
-        <ChevronRight className="w-3 h-3 text-text-muted/60" />
-      )}
+      {tool.summary && expanded && <span className="text-text-muted font-mono ml-1">-- {tool.summary}</span>}
+      {tool.summary && !expanded && <ChevronRight className="w-3 h-3 text-text-muted/60" />}
       {expanded && <ChevronDown className="w-3 h-3 text-text-muted/60" />}
     </button>
   )
@@ -389,7 +590,7 @@ function MessageBubble({ role, content, streaming = false }) {
       <div className="shrink-0 w-7 h-7 rounded-full bg-gold/10 border border-gold-dim flex items-center justify-center">
         <Sparkles className="w-3.5 h-3.5 text-gold" />
       </div>
-      <div className="flex-1 min-w-0 text-sm text-ivory leading-relaxed prose-advisor">
+      <div className="flex-1 min-w-0 text-sm text-ivory leading-relaxed">
         <ReactMarkdown
           components={{
             p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,

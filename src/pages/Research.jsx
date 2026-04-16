@@ -9,6 +9,9 @@ import {
 import { researchService, stocksService, marketService } from '../lib/api'
 import { benchApi } from '../lib/supabase'
 
+import { useAuth } from '../contexts/AuthContext'
+import { Link } from 'react-router-dom'
+import { Lock } from 'lucide-react'
 const RESEARCH_TABS = [
   { id: 'brief', label: 'Ticker Brief', icon: FileText },
   { id: 'bench', label: 'Research Bench', icon: Table2 },
@@ -20,6 +23,27 @@ const STATUS_CONFIG = {
   bullish: { label: 'Bullish', color: 'badge-positive' },
   bearish: { label: 'Bearish', color: 'badge-crimson' },
   passed: { label: 'Passed', color: 'badge-neutral' },
+}
+
+function ResearchBenchGate() {
+  const { isAnonymous } = useAuth()
+  if (isAnonymous) {
+    return (
+      <div className="card-elevated text-center py-16 px-6 max-w-xl mx-auto">
+        <div className="w-12 h-12 rounded-full bg-gold/10 border border-gold-dim flex items-center justify-center mx-auto mb-4">
+          <Lock className="w-5 h-5 text-gold" />
+        </div>
+        <h3 className="font-serif text-xl text-ivory mb-2">Research Bench</h3>
+        <p className="text-sm text-text-secondary leading-relaxed mb-6">
+          The Research Bench is for saved research. Stage tickers you're evaluating with status tags and notes &mdash; persistent across sessions.
+        </p>
+        <Link to="/login" className="btn-primary inline-flex items-center gap-2">
+          Sign in to start one
+        </Link>
+      </div>
+    )
+  }
+  return <ResearchBench />
 }
 
 export default function Research() {
@@ -60,7 +84,7 @@ export default function Research() {
       </div>
 
       {activeTab === 'brief' && <TickerBrief />}
-      {activeTab === 'bench' && <ResearchBench />}
+      {activeTab === 'bench' && <ResearchBenchGate />}
       {activeTab === 'overview' && <MarketOverview />}
     </div>
   )

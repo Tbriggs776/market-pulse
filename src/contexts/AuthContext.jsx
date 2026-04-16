@@ -105,7 +105,7 @@ export function AuthProvider({ children }) {
   }
 
   const value = {
-    user,
+    user, isAnonymous: !user,
     profile,
     loading,
     signUp,

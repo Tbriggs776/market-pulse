@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { AnonymousStoreProvider } from './contexts/AnonymousStoreContext'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Watchlist from './pages/Watchlist'
@@ -9,19 +10,6 @@ import Advisor from './pages/Advisor'
 import Login from './pages/Login'
 import Landing from './pages/Landing'
 import { RefreshCw } from 'lucide-react'
-
-function Placeholder({ name }) {
-  return (
-    <div className="flex items-center justify-center min-h-[60vh]">
-      <div className="text-center">
-        <h1 className="font-serif text-3xl tracking-wide text-ivory mb-2">
-          {name}
-        </h1>
-        <p className="text-text-secondary">Rebuilding in progress.</p>
-      </div>
-    </div>
-  )
-}
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -44,30 +32,27 @@ function ProtectedRoute({ children }) {
 function AppRoutes() {
   return (
     <Routes>
+      {/* Marketing homepage */}
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <Layout />
-          </ProtectedRoute>
-        }
-      >
-        <Route index element={<Dashboard />} />
+
+      {/* Public routes: Layout without ProtectedRoute */}
+      <Route element={<Layout />}>
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/research" element={<Research />} />
+        <Route path="/government" element={<Government />} />
+        <Route path="/advisor" element={<Advisor />} />
       </Route>
+
+      {/* Gated routes */}
       <Route
-        path="/"
         element={
           <ProtectedRoute>
             <Layout />
           </ProtectedRoute>
         }
       >
-        <Route path="watchlist" element={<Watchlist />} />
-        <Route path="research" element={<Research />} />
-        <Route path="government" element={<Government />} />
-        <Route path="advisor" element={<Advisor />} />
+        <Route path="/watchlist" element={<Watchlist />} />
       </Route>
     </Routes>
   )
@@ -76,7 +61,9 @@ function AppRoutes() {
 function App() {
   return (
     <AuthProvider>
-      <AppRoutes />
+      <AnonymousStoreProvider>
+        <AppRoutes />
+      </AnonymousStoreProvider>
     </AuthProvider>
   )
 }
