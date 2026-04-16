@@ -8,7 +8,6 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Fetch profile from profiles table
   async function fetchProfile(userId) {
     try {
       const { data, error } = await supabase
@@ -28,32 +27,48 @@ export function AuthProvider({ children }) {
   }
 
   useEffect(() => {
-    // Check existing session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      const currentUser = session?.user || null
-      setUser(currentUser)
-      if (currentUser) {
-        const p = await fetchProfile(currentUser.id)
-        setProfile(p)
-      }
-      setLoading(false)
-    })
+    let mounted = true
 
-    // Listen for auth changes
+    async function init() {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!mounted) return
+
+        const currentUser = session?.user || null
+        setUser(currentUser)
+
+        if (currentUser) {
+          const p = await fetchProfile(currentUser.id)
+          if (mounted) setProfile(p)
+        }
+      } catch (err) {
+        console.warn('[auth] init failed:', err.message)
+      } finally {
+        if (mounted) setLoading(false)
+      }
+    }
+
+    init()
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         const currentUser = session?.user || null
         setUser(currentUser)
+
         if (currentUser) {
           const p = await fetchProfile(currentUser.id)
           setProfile(p)
         } else {
           setProfile(null)
         }
+        setLoading(false)
       }
     )
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   async function signUp(email, password, displayName) {
