@@ -5,7 +5,7 @@ import {
   Sparkles, DollarSign, Scale, CreditCard, BarChart3,
   LayoutDashboard, PiggyBank, Building2, FileSpreadsheet,
   ArrowUpRight, ArrowDownRight, Receipt, Wallet, Banknote
-} from 'lucide-react'
+, ChevronDown, ChevronRight } from 'lucide-react'
 import { treasuryService, spendingService, statementsService } from '../lib/api'
 
 const GOV_TABS = [
@@ -554,6 +554,7 @@ function CashFlowStatement() {
 
   function DepartmentsTab() {
     const [view, setView] = useState('actual')
+    const [expandedId, setExpandedId] = useState(null)
     const { data: spending, isLoading, error } = useQuery({
       queryKey: ['spending-data'],
       queryFn: spendingService.getSpendingOverview,
@@ -567,7 +568,9 @@ function CashFlowStatement() {
     const totalBudget = agencies.reduce((sum, a) => sum + (a.budget || 0), 0)
     const totalObligated = agencies.reduce((sum, a) => sum + (a.obligated || 0), 0)
     const totalOutlays = agencies.reduce((sum, a) => sum + (a.outlays || 0), 0)
-    const sorted = view === 'budget' ? [...agencies].sort((a, b) => (b.budget || 0) - (a.budget || 0)) : [...agencies].sort((a, b) => (b.obligated || 0) - (a.obligated || 0))
+    const sorted = view === 'budget'
+      ? [...agencies].sort((a, b) => (b.budget || 0) - (a.budget || 0))
+      : [...agencies].sort((a, b) => (b.obligated || 0) - (a.obligated || 0))
 
     return (
       <div className="space-y-8">
@@ -596,7 +599,7 @@ function CashFlowStatement() {
                 <div className="font-mono text-xl text-ivory">{trillions(totalOutlays)}</div>
               </div>
             </div>
-            <p className="text-sm text-text-secondary mb-4">FY{spending?.fiscalYear} {view === 'actual' ? '— Obligations with budget comparison' : '— Budget authority with obligation rates'}</p>
+            <p className="text-sm text-text-secondary mb-4">FY{spending?.fiscalYear} {view === 'actual' ? '\u2014 Click any agency to see sub-agencies and AI grade' : '\u2014 Budget authority with obligation rates. Click to expand.'}</p>
             <div className="space-y-2">
               <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
                 <div className="col-span-3">Agency</div>
@@ -610,6 +613,8 @@ function CashFlowStatement() {
                 const secondary = view === 'budget' ? (a.obligated || 0) : (a.outlays || 0)
                 const total = view === 'budget' ? totalBudget : totalObligated
                 const pctOfTotal = total > 0 ? ((primary / total) * 100).toFixed(1) : '0.0'
+                const rowId = a.toptierCode || a.agencyId || `${a.name}-${i}`
+                const isExpanded = expandedId === rowId
                 let comparison = null
                 if (view === 'actual' && a.budget && a.budget > 0) {
                   const usedPct = ((a.obligated || 0) / a.budget) * 100
@@ -618,18 +623,35 @@ function CashFlowStatement() {
                 } else if (view === 'budget' && a.budget && a.budget > 0) {
                   const rate = ((a.obligated || 0) / a.budget) * 100
                   const color = rate > 90 ? 'text-crimson' : rate > 70 ? 'text-gold' : 'text-positive'
-                  comparison = <div className="flex items-center justify-end gap-2"><div className="w-16 h-1.5 bg-surface-elevated rounded-full overflow-hidden"><div className={`h-full rounded-full ${rate > 90 ? 'bg-crimson' : rate > 70 ? 'bg-gold' : 'bg-positive'}`} style={{ width: `${Math.min(rate, 100)}%` }} /></div><span className={`font-mono text-sm ${color}`}>{rate.toFixed(0)}%</span></div>
-                }
-                return (
-                  <div key={i} className="card grid grid-cols-12 gap-4 items-center hover:border-gold-dim transition-colors">
-                    <div className="col-span-3">
-                      <div className="text-sm text-ivory">{a.name}</div>
-                      {a.abbreviation && <div className="text-[10px] text-text-muted font-mono">{a.abbreviation}</div>}
+                  comparison = (
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="w-16 h-1.5 bg-surface-elevated rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${rate > 90 ? 'bg-crimson' : rate > 70 ? 'bg-gold' : 'bg-positive'}`} style={{ width: `${Math.min(rate, 100)}%` }} />
+                      </div>
+                      <span className={`font-mono text-sm ${color}`}>{rate.toFixed(0)}%</span>
                     </div>
-                    <div className="col-span-2 text-right font-mono text-sm text-ivory">{billions(primary)}</div>
-                    <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{billions(secondary)}</div>
-                    <div className="col-span-3 text-right">{comparison || <span className="text-text-muted text-sm">--</span>}</div>
-                    <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{pctOfTotal}%</div>
+                  )
+                }
+
+                return (
+                  <div key={rowId}>
+                    <button
+                      onClick={() => setExpandedId(isExpanded ? null : rowId)}
+                      className={`w-full card grid grid-cols-12 gap-4 items-center text-left transition-colors ${isExpanded ? 'border-gold-dim bg-surface-elevated' : 'hover:border-gold-dim'}`}
+                    >
+                      <div className="col-span-3 flex items-center gap-2">
+                        {isExpanded ? <ChevronDown className="w-4 h-4 text-gold shrink-0" /> : <ChevronRight className="w-4 h-4 text-text-muted shrink-0" />}
+                        <div className="min-w-0">
+                          <div className="text-sm text-ivory truncate">{a.name}</div>
+                          {a.abbreviation && <div className="text-[10px] text-text-muted font-mono">{a.abbreviation}</div>}
+                        </div>
+                      </div>
+                      <div className="col-span-2 text-right font-mono text-sm text-ivory">{billions(primary)}</div>
+                      <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{billions(secondary)}</div>
+                      <div className="col-span-3 text-right">{comparison || <span className="text-text-muted text-sm">--</span>}</div>
+                      <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{pctOfTotal}%</div>
+                    </button>
+                    {isExpanded && <AgencyDetailPanel agency={a} />}
                   </div>
                 )
               })}
@@ -640,9 +662,96 @@ function CashFlowStatement() {
     )
   }
 
-// ════════════════════════════════════════════════════
-// Cash Balance Chart
-// ════════════════════════════════════════════════════
+  function AgencyDetailPanel({ agency }) {
+    const { data, isLoading, error } = useQuery({
+      queryKey: ['agency-detail', agency.toptierCode],
+      queryFn: () => spendingService.getAgencyDetail(agency),
+      enabled: !!agency.toptierCode,
+      staleTime: 30 * 60 * 1000,
+      gcTime: 2 * 60 * 60 * 1000,
+      retry: 1,
+    })
+
+    const gradeColor = (g) => {
+      if (!g) return 'text-text-muted'
+      const letter = g.charAt(0)
+      if (letter === 'A') return 'text-positive'
+      if (letter === 'B') return 'text-gold-bright'
+      if (letter === 'C') return 'text-gold'
+      if (letter === 'D') return 'text-crimson'
+      if (letter === 'F') return 'text-crimson'
+      return 'text-text-muted'
+    }
+
+    return (
+      <div className="mt-2 mb-4 ml-6 pl-4 border-l-2 border-gold-dim space-y-4">
+        {isLoading && (
+          <div className="card-elevated border-gold/30 animate-pulse">
+            <div className="flex items-center gap-3 mb-4">
+              <Sparkles className="w-5 h-5 text-gold" />
+              <span className="text-sm text-gold">Grading {agency.name}\u2026</span>
+            </div>
+            <div className="space-y-2">
+              <div className="h-3 bg-surface-elevated rounded w-5/6" />
+              <div className="h-3 bg-surface-elevated rounded w-full" />
+              <div className="h-3 bg-surface-elevated rounded w-4/6" />
+            </div>
+          </div>
+        )}
+        {error && (
+          <div className="card border-crimson/30">
+            <div className="flex items-center gap-2 text-crimson text-sm">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              {error.message || 'Failed to load agency detail'}
+            </div>
+          </div>
+        )}
+        {data && !isLoading && (
+          <>
+            <div className="card-elevated border-gold/20">
+              <div className="flex items-start gap-4">
+                <div className="shrink-0">
+                  <div className={`w-16 h-16 rounded-full border-2 border-gold/30 bg-gold/5 flex items-center justify-center font-serif text-3xl font-bold ${gradeColor(data.grade)}`}>
+                    {data.grade || '\u2013'}
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-4 h-4 text-gold" />
+                    <span className="text-xs font-medium text-gold uppercase tracking-wide">Fiscal Execution Grade</span>
+                  </div>
+                  <p className="text-sm text-ivory leading-relaxed">{data.assessment}</p>
+                </div>
+              </div>
+            </div>
+
+            {data.subAgencies && data.subAgencies.length > 0 && (
+              <div>
+                <h3 className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Sub-Agencies ({data.subAgencies.length})</h3>
+                <div className="space-y-1">
+                  <div className="grid grid-cols-12 gap-4 px-4 py-1.5 text-[10px] text-text-muted uppercase tracking-wide">
+                    <div className="col-span-6">Sub-Agency</div>
+                    <div className="col-span-3 text-right">Obligations</div>
+                    <div className="col-span-3 text-right">Transactions</div>
+                  </div>
+                  {data.subAgencies.map((s, i) => (
+                    <div key={i} className="grid grid-cols-12 gap-4 px-4 py-2 bg-surface rounded border border-border items-center">
+                      <div className="col-span-6 min-w-0">
+                        <div className="text-sm text-ivory truncate">{s.name}</div>
+                        {s.abbreviation && <div className="text-[10px] text-text-muted font-mono">{s.abbreviation}</div>}
+                      </div>
+                      <div className="col-span-3 text-right font-mono text-sm text-ivory">{billions(s.obligations)}</div>
+                      <div className="col-span-3 text-right font-mono text-xs text-text-secondary">{s.transactionCount?.toLocaleString() || '0'}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    )
+  }
 
 function CashChart({ data }) {
   if (!data || data.length < 2) return null
