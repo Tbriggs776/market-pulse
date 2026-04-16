@@ -1,12 +1,11 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Watchlist from './pages/Watchlist'
+import Login from './pages/Login'
+import { RefreshCw } from 'lucide-react'
 
-/**
- * Pass 4: Dashboard + Watchlist are real. Research, Government,
- * and Advisor still placeholders until their respective passes.
- */
 function Placeholder({ name }) {
   return (
     <div className="flex items-center justify-center min-h-[60vh]">
@@ -20,10 +19,40 @@ function Placeholder({ name }) {
   )
 }
 
-function App() {
+/**
+ * ProtectedRoute -- redirects to /login if not authenticated.
+ * Shows a loading spinner while checking auth state.
+ */
+function ProtectedRoute({ children }) {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-canvas">
+        <RefreshCw className="w-6 h-6 text-gold animate-spin" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+
+  return children
+}
+
+function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<Layout />}>
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
         <Route index element={<Dashboard />} />
         <Route path="watchlist" element={<Watchlist />} />
         <Route path="research" element={<Placeholder name="Research" />} />
@@ -31,6 +60,14 @@ function App() {
         <Route path="advisor" element={<Placeholder name="Advisor" />} />
       </Route>
     </Routes>
+  )
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
   )
 }
 

@@ -5,25 +5,24 @@ import { newsService } from '../lib/api'
 import NewsCard from '../components/news/NewsCard'
 import NewsCardSkeleton from '../components/news/NewsCardSkeleton'
 import AIBriefing from '../components/dashboard/AIBriefing'
-
-/**
- * Dashboard
- * ----------------------------------------------------------
- * Pass 3 + 3B scope: news + AI briefing. Market movers come
- * in Pass 3C. The user's state is Arizona (hardcoded for now
- * until Pass 3.5 brings geolocation + state selector).
- */
+import { useAuth } from '../contexts/AuthContext'
 
 const TABS = [
   { id: 'all', label: 'All', icon: Globe },
-  { id: 'local', label: 'Arizona', icon: MapPin },
+  { id: 'local', label: 'Local', icon: MapPin },
   { id: 'national', label: 'National', icon: Flag },
   { id: 'business', label: 'Business', icon: Briefcase },
 ]
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('all')
-  const state = 'Arizona' // TODO Pass 3.5: user profile / geolocation
+  const { profile } = useAuth()
+  const state = profile?.state || 'Arizona'
+
+  // Update local tab label to match user's state
+  const tabs = TABS.map((t) =>
+    t.id === 'local' ? { ...t, label: state } : t
+  )
 
   const {
     data: news,
@@ -47,7 +46,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl tracking-wide text-ivory mb-1">
@@ -75,24 +73,20 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* AI Briefing */}
       <AIBriefing articles={news?.all || []} state={state} />
 
-      {/* News section */}
       <section>
         <div className="flex items-center justify-between mb-6">
           <h2 className="flex items-center gap-2 text-xl font-semibold text-ivory">
             <Newspaper className="w-5 h-5 text-gold" aria-hidden="true" />
             Latest News
           </h2>
-
-          {/* Tabs */}
           <div
             className="flex items-center gap-1 p-1 bg-surface rounded-md border border-border"
             role="tablist"
             aria-label="News categories"
           >
-            {TABS.map((tab) => (
+            {tabs.map((tab) => (
               <button
                 key={tab.id}
                 role="tab"
@@ -111,7 +105,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Error state */}
         {error && (
           <div className="card border-crimson/30 mb-4">
             <div className="text-crimson text-sm">
@@ -120,7 +113,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {isLoading
             ? Array.from({ length: 6 }).map((_, i) => (
