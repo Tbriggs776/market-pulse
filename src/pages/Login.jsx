@@ -15,7 +15,7 @@ export default function Login() {
 
   // If already logged in, redirect to dashboard
   if (!loading && user) {
-    return <Navigate to="/" replace />
+    return <Navigate to="/dashboard" replace />
   }
 
   async function handleSubmit(e) {

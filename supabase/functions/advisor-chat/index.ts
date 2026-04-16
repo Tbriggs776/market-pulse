@@ -14,7 +14,7 @@ const MODEL_IDS: Record<string, string> = {
 }
 
 const MAX_TOOL_CALLS = 5
-const MAX_LOOPS = 6 // tool call rounds + final text
+const MAX_LOOPS = 6
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -39,11 +39,8 @@ Always:
 - Be specific. Name tickers, cite numbers, reference dates.
 - Be honest about uncertainty. When you don't know, say so.
 - Prefer decisions over commentary. If asked "should I," give a view.
-- Do not remind the user you are an AI. Do not add disclaimers about not being a licensed advisor unless the user asks about regulated advice.
+- Do not remind the user you are an AI. Do not add disclaimers about not being a licensed advisor unless the user asks about regulated advice.`
 
-The user is a fractional CFO who runs a PE acquisition platform (Veritas Ridge) and a financial advisory practice (Growth by the Numbers). They think institutionally. Match that register.`
-
-// === TOOL DEFINITIONS ===
 const TOOLS = [
   {
     name: "get_quote",
@@ -51,11 +48,7 @@ const TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        symbols: {
-          type: "array",
-          items: { type: "string" },
-          description: "Array of ticker symbols to quote, e.g. ['NVDA', 'AMD', 'AVGO']. 1-10 symbols per call.",
-        },
+        symbols: { type: "array", items: { type: "string" }, description: "Array of ticker symbols, 1-10 per call." },
       },
       required: ["symbols"],
     },
@@ -65,12 +58,7 @@ const TOOLS = [
     description: "Get a full research dossier for a single ticker: company overview, fundamentals, 30-day price history, and a generated investment thesis. Use when the user wants deeper analysis of a specific company. Slower than get_quote (5-10 seconds).",
     input_schema: {
       type: "object",
-      properties: {
-        symbol: {
-          type: "string",
-          description: "Single ticker symbol to research, e.g. 'NVDA'",
-        },
-      },
+      properties: { symbol: { type: "string", description: "Single ticker symbol, e.g. 'NVDA'" } },
       required: ["symbol"],
     },
   },
@@ -93,7 +81,7 @@ const TOOLS = [
         category: {
           type: "string",
           enum: ["business", "national", "local", "all"],
-          description: "Which news category. Use 'business' for market-relevant news, 'national' for policy/politics, 'local' for state news, 'all' for a mixed feed.",
+          description: "Which news category.",
         },
       },
       required: ["category"],
@@ -101,124 +89,111 @@ const TOOLS = [
   },
   {
     name: "get_user_watchlist",
-    description: "Get the user's current watchlist with live prices. Use this to refresh the portfolio view mid-conversation, especially if the user mentions adding a ticker.",
+    description: "Get the user's current watchlist with live prices. Use this to refresh the portfolio view mid-conversation.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
 ]
 
-// === TOOL DISPATCHER ===
 async function callInternalFunction(fnName: string, body: any): Promise<any> {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/${fnName}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
-    },
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${SERVICE_ROLE_KEY}` },
     body: JSON.stringify(body),
   })
   const text = await res.text()
-  if (!res.ok) {
-    return { error: `${fnName} returned ${res.status}: ${text.slice(0, 200)}` }
-  }
-  try {
-    return JSON.parse(text)
-  } catch {
-    return { error: `${fnName} returned non-JSON response` }
-  }
+  if (!res.ok) return { error: `${fnName} returned ${res.status}: ${text.slice(0, 200)}` }
+  try { return JSON.parse(text) } catch { return { error: `${fnName} returned non-JSON` } }
 }
 
-async function executeTool(toolName: string, toolInput: any, supabaseAdmin: any, userId: string): Promise<string> {
+async function executeTool(
+  toolName: string,
+  toolInput: any,
+  supabaseAdmin: any,
+  userId: string | null,
+  anonymousWatchlist: any[] | null,
+): Promise<string> {
   try {
     switch (toolName) {
       case "get_quote": {
         const symbols = Array.isArray(toolInput?.symbols) ? toolInput.symbols : []
         if (symbols.length === 0) return JSON.stringify({ error: "symbols array required" })
-        const result = await callInternalFunction("stock-quote", { symbols: symbols.slice(0, 10) })
-        return JSON.stringify(result)
+        return JSON.stringify(await callInternalFunction("stock-quote", { symbols: symbols.slice(0, 10) }))
       }
-
       case "research_ticker": {
         const symbol = String(toolInput?.symbol || "").trim()
         if (!symbol) return JSON.stringify({ error: "symbol required" })
         const result = await callInternalFunction("research-brief", { symbol })
-        // Strip the long history array to keep context manageable
         if (result.history && Array.isArray(result.history)) {
           const h = result.history
           result.historySummary = h.length > 0 ? {
-            days: h.length,
-            startDate: h[0].date,
-            endDate: h[h.length - 1].date,
-            startPrice: h[0].close,
-            endPrice: h[h.length - 1].close,
-            low: Math.min(...h.map((p: any) => p.close)),
-            high: Math.max(...h.map((p: any) => p.close)),
+            days: h.length, startDate: h[0].date, endDate: h[h.length - 1].date,
+            startPrice: h[0].close, endPrice: h[h.length - 1].close,
+            low: Math.min(...h.map((p: any) => p.close)), high: Math.max(...h.map((p: any) => p.close)),
           } : null
           delete result.history
         }
         return JSON.stringify(result)
       }
-
-      case "get_market_overview": {
-        const result = await callInternalFunction("market-overview", {})
-        return JSON.stringify(result)
-      }
-
+      case "get_market_overview":
+        return JSON.stringify(await callInternalFunction("market-overview", {}))
       case "get_treasury_snapshot": {
         const result = await callInternalFunction("treasury-data", {})
-        // Trim debt history to latest 5 data points (enough for trend, saves tokens)
         if (Array.isArray(result.debt) && result.debt.length > 5) {
           result.debtHistoryTrimmed = true
           result.debt = result.debt.slice(0, 5)
         }
         return JSON.stringify(result)
       }
-
       case "search_news": {
         const category = String(toolInput?.category || "business")
         const result = await callInternalFunction("fetch-news", { category })
-        // Trim description length to control context size
         const articles = (result.articles || result.all || []).slice(0, 10).map((a: any) => ({
-          title: a.title,
-          source: a.source,
-          publishedAt: a.publishedAt,
-          description: (a.description || "").slice(0, 300),
-          tickers: a.tickers,
-          url: a.url,
+          title: a.title, source: a.source, publishedAt: a.publishedAt,
+          description: (a.description || "").slice(0, 300), tickers: a.tickers, url: a.url,
         }))
         return JSON.stringify({ category, articles })
       }
-
       case "get_user_watchlist": {
+        // Anonymous path: return the passed watchlist enriched with live quotes
+        if (!userId) {
+          if (!anonymousWatchlist || anonymousWatchlist.length === 0) {
+            return JSON.stringify({ watchlist: [], message: "Anonymous session watchlist is empty" })
+          }
+          const symbols = anonymousWatchlist.map((w) => w.symbol)
+          const quotesResult = await callInternalFunction("stock-quote", { symbols })
+          const quotes = quotesResult?.quotes || {}
+          const enriched = anonymousWatchlist.map((w) => {
+            const q = quotes[w.symbol] || null
+            return {
+              symbol: w.symbol, name: w.name,
+              addedPrice: w.added_price ?? w.addedPrice ?? null,
+              currentPrice: q?.price ?? null, dayChangePercent: q?.changePercent ?? null,
+            }
+          })
+          return JSON.stringify({ watchlist: enriched, anonymous: true })
+        }
+        // Authenticated path: read from DB
         const { data: wl } = await supabaseAdmin
           .from("watchlist")
           .select("symbol, name, exchange, added_price, alert_price, created_at")
           .eq("user_id", userId)
-          .order("created_at", { ascending: false })
-          .limit(30)
+          .order("created_at", { ascending: false }).limit(30)
         if (!wl || wl.length === 0) return JSON.stringify({ watchlist: [], message: "Watchlist is empty" })
-
         const symbols = wl.map((w: any) => w.symbol)
         const quotesResult = await callInternalFunction("stock-quote", { symbols })
         const quotes = quotesResult?.quotes || {}
-
         const enriched = wl.map((w: any) => {
           const q = quotes[w.symbol] || null
           const pnl = q && w.added_price
             ? { absolute: Math.round((q.price - w.added_price) * 100) / 100, percent: Math.round(((q.price - w.added_price) / w.added_price) * 10000) / 100 }
             : null
           return {
-            symbol: w.symbol,
-            name: w.name,
-            addedPrice: w.added_price,
-            alertPrice: w.alert_price,
-            currentPrice: q?.price ?? null,
-            dayChangePercent: q?.changePercent ?? null,
-            pnlSinceAdded: pnl,
+            symbol: w.symbol, name: w.name, addedPrice: w.added_price, alertPrice: w.alert_price,
+            currentPrice: q?.price ?? null, dayChangePercent: q?.changePercent ?? null, pnlSinceAdded: pnl,
           }
         })
         return JSON.stringify({ watchlist: enriched })
       }
-
       default:
         return JSON.stringify({ error: `Unknown tool: ${toolName}` })
     }
@@ -235,19 +210,41 @@ function formatCurrency(n: number | null | undefined): string {
   return `$${n.toFixed(2)}`
 }
 
-async function buildPortfolioSnapshot(supabaseAdmin: any, userId: string): Promise<string> {
+async function buildPortfolioSnapshot(
+  supabaseAdmin: any,
+  userId: string | null,
+  anonymousWatchlist: any[] | null,
+): Promise<string> {
   const parts: string[] = []
   const today = new Date().toISOString().slice(0, 10)
   parts.push(`TODAY: ${today}`)
 
+  // Anonymous user: use watchlist passed in body, no bench
+  if (!userId) {
+    parts.push("")
+    parts.push("SESSION TYPE: anonymous (guest user, not signed in)")
+    parts.push("")
+    if (anonymousWatchlist && anonymousWatchlist.length > 0) {
+      parts.push(`SESSION WATCHLIST (${anonymousWatchlist.length} tickers, not saved):`)
+      for (const w of anonymousWatchlist) {
+        const price = w.added_price ?? w.addedPrice
+        const addedAt = price ? ` added at ${formatCurrency(Number(price))}` : ""
+        parts.push(`- ${w.symbol}${w.name ? ` (${w.name})` : ""}${addedAt}`)
+      }
+    } else {
+      parts.push("SESSION WATCHLIST: empty (user has not added any tickers yet)")
+    }
+    parts.push("")
+    parts.push("NOTE: Guest user has no saved research bench. If they ask about their portfolio, their session watchlist above is all you have.")
+    return parts.join("\n")
+  }
+
+  // Authenticated path
   try {
     const { data: watchlist } = await supabaseAdmin
       .from("watchlist")
       .select("symbol, name, exchange, added_price, alert_price, created_at")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(30)
-
+      .eq("user_id", userId).order("created_at", { ascending: false }).limit(30)
     if (watchlist && watchlist.length > 0) {
       parts.push("")
       parts.push(`USER WATCHLIST (${watchlist.length} tickers):`)
@@ -268,10 +265,7 @@ async function buildPortfolioSnapshot(supabaseAdmin: any, userId: string): Promi
     const { data: bench } = await supabaseAdmin
       .from("research_bench")
       .select("symbol, name, sector, status, notes, updated_at")
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(20)
-
+      .eq("user_id", userId).order("updated_at", { ascending: false }).limit(20)
     if (bench && bench.length > 0) {
       parts.push("")
       parts.push(`RESEARCH BENCH (${bench.length} items):`)
@@ -285,30 +279,39 @@ async function buildPortfolioSnapshot(supabaseAdmin: any, userId: string): Promi
   return parts.join("\n")
 }
 
-// === MAIN HANDLER ===
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
 
   try {
-    const authHeader = req.headers.get("Authorization") || ""
-    const token = authHeader.replace(/^Bearer\s+/i, "")
-    if (!token) {
-      return new Response(JSON.stringify({ error: "Missing auth" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
-    }
-
     const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
-    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token)
-    if (userErr || !userData.user) {
-      return new Response(JSON.stringify({ error: "Invalid auth" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
+    // Dual-mode auth: if token present, resolve user; if absent, treat as anonymous
+    const authHeader = req.headers.get("Authorization") || ""
+    const token = authHeader.replace(/^Bearer\s+/i, "")
+
+    let userId: string | null = null
+    if (token) {
+      const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token)
+      if (!userErr && userData.user) {
+        userId = userData.user.id
+      }
+      // If token present but invalid, we still fall through to anonymous mode.
+      // This is permissive by design: expired tokens degrade gracefully.
     }
-    const userId = userData.user.id
 
     const body = await req.json()
-    const { conversationId: incomingConvId, userMessage, modelKey = "sonnet" } = body as {
+    const {
+      conversationId: incomingConvId,
+      userMessage,
+      modelKey = "sonnet",
+      anonymousContext,
+      priorMessages,
+    } = body as {
       conversationId?: string
       userMessage: string
       modelKey?: "sonnet" | "opus" | "haiku"
+      anonymousContext?: { watchlist?: any[] }
+      priorMessages?: Array<{ role: string; content: string }>
     }
 
     if (!userMessage || !userMessage.trim()) {
@@ -316,38 +319,45 @@ serve(async (req) => {
     }
 
     const modelId = MODEL_IDS[modelKey] || MODEL_IDS.sonnet
+    const anonymousWatchlist = anonymousContext?.watchlist || null
 
+    // Conversation handling: authenticated writes to DB, anonymous works in memory
     let conversationId = incomingConvId
-    if (!conversationId) {
-      const { data: newConv, error: convErr } = await supabaseAdmin
-        .from("advisor_conversations")
-        .insert({ user_id: userId, title: userMessage.slice(0, 60), model: modelKey })
-        .select()
-        .single()
-      if (convErr) throw convErr
-      conversationId = newConv.id
+    if (userId) {
+      if (!conversationId) {
+        const { data: newConv, error: convErr } = await supabaseAdmin
+          .from("advisor_conversations")
+          .insert({ user_id: userId, title: userMessage.slice(0, 60), model: modelKey })
+          .select().single()
+        if (convErr) throw convErr
+        conversationId = newConv.id
+      }
+      await supabaseAdmin.from("advisor_messages").insert({
+        conversation_id: conversationId, user_id: userId, role: "user", content: userMessage,
+      })
     }
 
-    await supabaseAdmin.from("advisor_messages").insert({
-      conversation_id: conversationId,
-      user_id: userId,
-      role: "user",
-      content: userMessage,
-    })
+    // Build message history
+    let claudeMessages: any[] = []
+    if (userId) {
+      const { data: history } = await supabaseAdmin
+        .from("advisor_messages")
+        .select("role, content")
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: true }).limit(40)
+      claudeMessages = (history || [])
+        .filter((m: any) => m.role === "user" || m.role === "assistant")
+        .map((m: any) => ({ role: m.role, content: m.content }))
+    } else {
+      // Anonymous: accept prior messages from client (session state) + the new user message
+      claudeMessages = (priorMessages || [])
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .slice(-20)
+        .map((m) => ({ role: m.role, content: m.content }))
+      claudeMessages.push({ role: "user", content: userMessage })
+    }
 
-    const { data: history } = await supabaseAdmin
-      .from("advisor_messages")
-      .select("role, content")
-      .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true })
-      .limit(40)
-
-    // Build initial conversation from persisted messages
-    const claudeMessages: any[] = (history || [])
-      .filter((m: any) => m.role === "user" || m.role === "assistant")
-      .map((m: any) => ({ role: m.role, content: m.content }))
-
-    const snapshot = await buildPortfolioSnapshot(supabaseAdmin, userId)
+    const snapshot = await buildPortfolioSnapshot(supabaseAdmin, userId, anonymousWatchlist)
     const systemPrompt = `${SYSTEM_PROMPT_BASE}\n\n=== PORTFOLIO CONTEXT ===\n${snapshot}\n=== END CONTEXT ===`
 
     const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY")
@@ -361,7 +371,7 @@ serve(async (req) => {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
         }
 
-        emit("meta", { conversationId })
+        emit("meta", { conversationId: conversationId || null, anonymous: !userId })
 
         let finalAssistantText = ""
         let totalInputTokens = 0
@@ -370,25 +380,14 @@ serve(async (req) => {
         const toolCallsLog: any[] = []
 
         try {
-          // Tool-use loop
           for (let loop = 0; loop < MAX_LOOPS; loop++) {
-            const reqBody: any = {
-              model: modelId,
-              max_tokens: 2048,
-              system: systemPrompt,
-              messages: claudeMessages,
-              tools: TOOLS,
-              stream: true,
-            }
-
             const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
               method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "x-api-key": anthropicKey,
-                "anthropic-version": "2023-06-01",
-              },
-              body: JSON.stringify(reqBody),
+              headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
+              body: JSON.stringify({
+                model: modelId, max_tokens: 2048, system: systemPrompt,
+                messages: claudeMessages, tools: TOOLS, stream: true,
+              }),
             })
 
             if (!claudeRes.ok || !claudeRes.body) {
@@ -397,7 +396,6 @@ serve(async (req) => {
               break
             }
 
-            // Parse SSE stream, accumulating content blocks
             const reader = claudeRes.body.getReader()
             const decoder = new TextDecoder()
             let buffer = ""
@@ -418,7 +416,6 @@ serve(async (req) => {
                 if (!payload || payload === "[DONE]") continue
                 try {
                   const evt = JSON.parse(payload)
-
                   if (evt.type === "message_start" && evt.message?.usage) {
                     turnInputTokens = evt.message.usage.input_tokens || 0
                   } else if (evt.type === "content_block_start") {
@@ -454,24 +451,14 @@ serve(async (req) => {
             totalInputTokens += turnInputTokens
             totalOutputTokens += turnOutputTokens
 
-            // Accumulate the text portion of this turn
-            const turnText = contentBlocks
-              .filter((b) => b?.type === "text")
-              .map((b) => b.text)
-              .join("")
+            const turnText = contentBlocks.filter((b) => b?.type === "text").map((b) => b.text).join("")
             if (turnText) finalAssistantText += (finalAssistantText ? "\n\n" : "") + turnText
 
-            if (stopReason !== "tool_use") {
-              // Done: no more tool calls
-              break
-            }
+            if (stopReason !== "tool_use") break
 
-            // Extract tool uses from this turn
             const toolUses = contentBlocks.filter((b) => b?.type === "tool_use")
             if (toolUses.length === 0) break
 
-            // Append assistant message (text + tool_uses) to conversation
-            // Strip internal fields (inputJson) before sending back to API
             const cleanContent = contentBlocks
               .filter((b) => b?.type === "text" || b?.type === "tool_use")
               .map((b) => {
@@ -481,70 +468,53 @@ serve(async (req) => {
               })
             claudeMessages.push({ role: "assistant", content: cleanContent })
 
-            // Execute each tool, respecting the cap
             const toolResults: any[] = []
             for (const tu of toolUses) {
               toolCallCount++
               if (toolCallCount > MAX_TOOL_CALLS) {
                 emit("tool_call", { id: tu.id, name: tu.name, input: tu.input, status: "skipped" })
                 toolResults.push({
-                  type: "tool_result",
-                  tool_use_id: tu.id,
+                  type: "tool_result", tool_use_id: tu.id,
                   content: JSON.stringify({ error: "Tool call limit reached. Answer with data collected so far." }),
                   is_error: true,
                 })
                 continue
               }
-
               emit("tool_call", { id: tu.id, name: tu.name, input: tu.input, status: "running" })
-              const resultStr = await executeTool(tu.name, tu.input, supabaseAdmin, userId)
+              const resultStr = await executeTool(tu.name, tu.input, supabaseAdmin, userId, anonymousWatchlist)
               let resultParsed: any = null
               try { resultParsed = JSON.parse(resultStr) } catch { resultParsed = { raw: resultStr } }
               const isErr = resultParsed?.error != null
               emit("tool_result", { id: tu.id, name: tu.name, status: isErr ? "error" : "ok", summary: summarizeToolResult(tu.name, resultParsed) })
               toolCallsLog.push({ name: tu.name, input: tu.input, error: resultParsed?.error || null })
               toolResults.push({
-                type: "tool_result",
-                tool_use_id: tu.id,
-                content: resultStr,
-                is_error: isErr,
+                type: "tool_result", tool_use_id: tu.id, content: resultStr, is_error: isErr,
               })
             }
-
             claudeMessages.push({ role: "user", content: toolResults })
-
-            if (toolCallCount >= MAX_TOOL_CALLS) {
-              // Loop will re-call Claude once more with the cap-reached results so it answers
-            }
           }
         } catch (err) {
           emit("error", { error: String((err as Error).message || err) })
         }
 
-        // Persist final assistant text
-        if (finalAssistantText) {
+        // Persist only for authenticated users
+        if (userId && finalAssistantText) {
           await supabaseAdmin.from("advisor_messages").insert({
-            conversation_id: conversationId,
-            user_id: userId,
-            role: "assistant",
-            content: finalAssistantText,
-            model: modelKey,
-            input_tokens: totalInputTokens,
-            output_tokens: totalOutputTokens,
+            conversation_id: conversationId, user_id: userId, role: "assistant",
+            content: finalAssistantText, model: modelKey,
+            input_tokens: totalInputTokens, output_tokens: totalOutputTokens,
           })
         }
 
-        emit("done", { ok: true, toolCalls: toolCallsLog.length })
+        emit("done", { ok: true, toolCalls: toolCallsLog.length, anonymous: !userId })
         controller.close()
       },
     })
 
     return new Response(stream, {
       headers: {
-        ...corsHeaders,
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        ...corsHeaders, "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache", "Connection": "keep-alive",
       },
     })
   } catch (e) {
@@ -553,11 +523,9 @@ serve(async (req) => {
   }
 })
 
-// Short human-readable summary of a tool result for the UI chip
 function summarizeToolResult(toolName: string, result: any): string {
   if (!result) return "no result"
   if (result.error) return `error: ${String(result.error).slice(0, 80)}`
-
   switch (toolName) {
     case "get_quote": {
       const quotes = result.quotes || {}
@@ -569,26 +537,19 @@ function summarizeToolResult(toolName: string, result: any): string {
       }
       return `${syms.length} quotes: ${syms.join(", ")}`
     }
-    case "research_ticker": {
-      return `${result.symbol} dossier (${result.thesis ? "thesis generated" : "partial"})`
-    }
+    case "research_ticker":
+      return `${result.symbol} dossier`
     case "get_market_overview": {
       const ind = (result.indices || []).length
       const mac = (result.macro || []).length
       return `${mac} macro series, ${ind} indices`
     }
-    case "get_treasury_snapshot": {
-      return "fiscal snapshot"
-    }
-    case "search_news": {
-      const n = (result.articles || []).length
-      return `${n} ${result.category || ""} articles`
-    }
+    case "get_treasury_snapshot": return "fiscal snapshot"
+    case "search_news": return `${(result.articles || []).length} ${result.category || ""} articles`
     case "get_user_watchlist": {
       const n = (result.watchlist || []).length
-      return `${n} positions with live prices`
+      return result.anonymous ? `${n} session positions` : `${n} positions`
     }
-    default:
-      return "ok"
+    default: return "ok"
   }
 }

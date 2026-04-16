@@ -7,6 +7,7 @@ import Research from './pages/Research'
 import Government from './pages/Government'
 import Advisor from './pages/Advisor'
 import Login from './pages/Login'
+import Landing from './pages/Landing'
 import { RefreshCw } from 'lucide-react'
 
 function Placeholder({ name }) {
@@ -43,7 +44,18 @@ function ProtectedRoute({ children }) {
 function AppRoutes() {
   return (
     <Routes>
+      <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<Dashboard />} />
+      </Route>
       <Route
         path="/"
         element={
@@ -52,7 +64,6 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Dashboard />} />
         <Route path="watchlist" element={<Watchlist />} />
         <Route path="research" element={<Research />} />
         <Route path="government" element={<Government />} />

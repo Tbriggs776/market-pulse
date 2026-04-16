@@ -6,7 +6,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/watchlist', label: 'Watchlist', icon: Star },
   { to: '/research', label: 'Research', icon: Search },
   { to: '/government', label: 'Government', icon: Landmark },
@@ -58,7 +58,7 @@ export default function Layout() {
               <NavLink
                 key={item.to}
                 to={item.to}
-                end={item.to === '/'}
+                end={item.to === '/dashboard'}
                 className={({ isActive }) =>
                   `flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                     isActive
