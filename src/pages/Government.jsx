@@ -485,116 +485,164 @@ function CashFlowStatement() {
 // Spending Tab
 // ════════════════════════════════════════════════════
 
-function SpendingTab() {
-  const { data: spending, isLoading, error, isFetching, refetch } = useQuery({
-    queryKey: ['spending-data'],
-    queryFn: spendingService.getSpendingOverview,
-    staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
-  })
+  function SpendingTab() {
+    const [view, setView] = useState('actual')
+    const { data: spending, isLoading, error, isFetching, refetch } = useQuery({
+      queryKey: ['spending-data'],
+      queryFn: spendingService.getSpendingOverview,
+      staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+    })
 
-  if (isLoading) return <LoadingSkeleton />
-  if (error) return <ErrorCard message={error.message} />
+    if (isLoading) return <LoadingSkeleton />
+    if (error) return <ErrorCard message={error.message} />
 
-  const totalSpending = (spending?.budgetFunctions || []).reduce((sum, b) => sum + (b.amount || 0), 0)
+    const totalSpending = (spending?.budgetFunctions || []).reduce((sum, b) => sum + (b.amount || 0), 0)
 
-  return (
-    <div className="space-y-8">
-      <div className="flex justify-end">
-        <button onClick={() => refetch()} disabled={isFetching} className="btn-secondary">
-          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
-        </button>
-      </div>
-      {totalSpending > 0 && (
-        <div className="card-elevated">
-          <div className="text-xs text-text-muted mb-1">Total Federal Spending (FY{spending?.fiscalYear})</div>
-          <div className="font-mono text-3xl text-ivory">{trillions(totalSpending)}</div>
-        </div>
-      )}
-      {spending?.budgetFunctions && spending.budgetFunctions.length > 0 && (
-        <section>
-          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
-            <PiggyBank className="w-5 h-5 text-gold" /> Spending by Budget Function
-          </h2>
-          <div className="space-y-2">
-            <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
-              <div className="col-span-5">Function</div>
-              <div className="col-span-3 text-right">Amount</div>
-              <div className="col-span-2 text-right">% of Total</div>
-              <div className="col-span-2 text-right">YoY Change</div>
-            </div>
-            {spending.budgetFunctions.map((b, i) => {
-              const pct = totalSpending > 0 ? (b.amount / totalSpending) * 100 : 0
-              return (
-                <div key={i} className="card grid grid-cols-12 gap-4 items-center hover:border-gold-dim transition-colors">
-                  <div className="col-span-5">
-                    <div className="text-sm text-ivory">{b.name}</div>
-                    <div className="mt-1.5 h-1.5 bg-surface-elevated rounded-full overflow-hidden">
-                      <div className="h-full bg-gold/40 rounded-full" style={{ width: `${Math.min(pct * 3, 100)}%` }} />
-                    </div>
-                  </div>
-                  <div className="col-span-3 text-right font-mono text-sm text-ivory">{billions(b.amount)}</div>
-                  <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{pct.toFixed(1)}%</div>
-                  <div className="col-span-2 text-right">
-                    {b.yoyChange != null ? <span className={`font-mono text-sm ${b.yoyChange >= 0 ? 'text-crimson' : 'text-positive'}`}>{fmtPct(b.yoyChange)}</span> : <span className="text-text-muted text-sm">--</span>}
-                  </div>
-                </div>
-              )
-            })}
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center bg-surface-elevated rounded-lg p-0.5 border border-border">
+            <button onClick={() => setView('actual')} className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${view === 'actual' ? 'bg-gold/20 text-gold border border-gold-dim' : 'text-text-secondary hover:text-ivory'}`}>Actual to Date</button>
+            <button onClick={() => setView('budget')} className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${view === 'budget' ? 'bg-gold/20 text-gold border border-gold-dim' : 'text-text-secondary hover:text-ivory'}`}>Budget Authority</button>
           </div>
-        </section>
-      )}
-    </div>
-  )
-}
+          <button onClick={() => refetch()} disabled={isFetching} className="btn-secondary">
+            <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
+          </button>
+        </div>
+        {totalSpending > 0 && (
+          <div className="card-elevated">
+            <div className="text-xs text-text-muted mb-1">{view === 'actual' ? `Actual Federal Spending (FY${spending?.fiscalYear})` : `Budget Authority (FY${spending?.fiscalYear})`}</div>
+            <div className="font-mono text-3xl text-ivory">{trillions(totalSpending)}</div>
+            {view === 'actual' && <div className="text-xs text-text-muted mt-1">Obligations through latest reporting period</div>}
+            {view === 'budget' && <div className="text-xs text-text-muted mt-1">See Departments tab for agency-level budget authority</div>}
+          </div>
+        )}
+        {spending?.budgetFunctions && spending.budgetFunctions.length > 0 && (
+          <section>
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
+              <PiggyBank className="w-5 h-5 text-gold" /> {view === 'actual' ? 'Spending by Budget Function' : 'Budget Authority by Function'}
+            </h2>
+            <div className="space-y-2">
+              <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
+                <div className="col-span-5">Function</div>
+                <div className="col-span-3 text-right">{view === 'actual' ? 'Actual' : 'Budget'}</div>
+                <div className="col-span-2 text-right">% of Total</div>
+                <div className="col-span-2 text-right">{view === 'actual' ? 'vs Budget' : 'vs Actual'}</div>
+              </div>
+              {spending.budgetFunctions.map((b, i) => {
+                const pct = totalSpending > 0 ? (b.amount / totalSpending) * 100 : 0
+                return (
+                  <div key={i} className="card grid grid-cols-12 gap-4 items-center hover:border-gold-dim transition-colors">
+                    <div className="col-span-5">
+                      <div className="text-sm text-ivory">{b.name}</div>
+                      <div className="mt-1.5 h-1.5 bg-surface-elevated rounded-full overflow-hidden">
+                        <div className="h-full bg-gold/40 rounded-full" style={{ width: `${Math.min(pct * 3, 100)}%` }} />
+                      </div>
+                    </div>
+                    <div className="col-span-3 text-right font-mono text-sm text-ivory">{billions(b.amount)}</div>
+                    <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{pct.toFixed(1)}%</div>
+                    <div className="col-span-2 text-right"><span className="text-text-muted text-xs">--</span></div>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+      </div>
+    )
+  }
 
 // ════════════════════════════════════════════════════
 // Departments Tab
 // ════════════════════════════════════════════════════
 
-function DepartmentsTab() {
-  const { data: spending, isLoading, error } = useQuery({
-    queryKey: ['spending-data'],
-    queryFn: spendingService.getSpendingOverview,
-    staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
-  })
+  function DepartmentsTab() {
+    const [view, setView] = useState('actual')
+    const { data: spending, isLoading, error } = useQuery({
+      queryKey: ['spending-data'],
+      queryFn: spendingService.getSpendingOverview,
+      staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+    })
 
-  if (isLoading) return <LoadingSkeleton />
-  if (error) return <ErrorCard message={error.message} />
+    if (isLoading) return <LoadingSkeleton />
+    if (error) return <ErrorCard message={error.message} />
 
-  return (
-    <div className="space-y-8">
-      {spending?.agencies && spending.agencies.length > 0 && (
-        <section>
-          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
-            <Building2 className="w-5 h-5 text-gold" /> Top Federal Agencies by Spending
-          </h2>
-          <p className="text-sm text-text-secondary mb-4">FY{spending.fiscalYear} obligations. Expandable sub-agency detail coming in Pass 6C.</p>
-          <div className="space-y-2">
-            <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
-              <div className="col-span-5">Agency</div>
-              <div className="col-span-3 text-right">Obligations</div>
-              <div className="col-span-2 text-right">% of Budget</div>
-              <div className="col-span-2 text-right">YoY Change</div>
-            </div>
-            {spending.agencies.map((a, i) => (
-              <div key={i} className="card grid grid-cols-12 gap-4 items-center hover:border-gold-dim transition-colors">
-                <div className="col-span-5">
-                  <div className="text-sm text-ivory">{a.name}</div>
-                  {a.abbreviation && <div className="text-[10px] text-text-muted font-mono">{a.abbreviation}</div>}
-                </div>
-                <div className="col-span-3 text-right font-mono text-sm text-ivory">{billions(a.obligated)}</div>
-                <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{a.percentage != null ? (a.percentage * 100).toFixed(1) + '%' : '--'}</div>
-                <div className="col-span-2 text-right">
-                  {a.yoyChange != null ? <span className={`font-mono text-sm ${a.yoyChange >= 0 ? 'text-crimson' : 'text-positive'}`}>{fmtPct(a.yoyChange)}</span> : <span className="text-text-muted text-sm">--</span>}
-                </div>
+    const agencies = spending?.agencies || []
+    const totalBudget = agencies.reduce((sum, a) => sum + (a.budget || 0), 0)
+    const totalObligated = agencies.reduce((sum, a) => sum + (a.obligated || 0), 0)
+    const totalOutlays = agencies.reduce((sum, a) => sum + (a.outlays || 0), 0)
+    const sorted = view === 'budget' ? [...agencies].sort((a, b) => (b.budget || 0) - (a.budget || 0)) : [...agencies].sort((a, b) => (b.obligated || 0) - (a.obligated || 0))
+
+    return (
+      <div className="space-y-8">
+        {agencies.length > 0 && (
+          <section>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory">
+                <Building2 className="w-5 h-5 text-gold" /> Top Federal Agencies
+              </h2>
+              <div className="flex items-center bg-surface-elevated rounded-lg p-0.5 border border-border">
+                <button onClick={() => setView('actual')} className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${view === 'actual' ? 'bg-gold/20 text-gold border border-gold-dim' : 'text-text-secondary hover:text-ivory'}`}>Actual to Date</button>
+                <button onClick={() => setView('budget')} className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${view === 'budget' ? 'bg-gold/20 text-gold border border-gold-dim' : 'text-text-secondary hover:text-ivory'}`}>Budget Authority</button>
               </div>
-            ))}
-          </div>
-        </section>
-      )}
-    </div>
-  )
-}
+            </div>
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              <div className={`card ${view === 'budget' ? 'border-gold-dim' : ''}`}>
+                <div className="text-xs text-text-muted mb-1">Budget Authority</div>
+                <div className="font-mono text-xl text-ivory">{trillions(totalBudget)}</div>
+              </div>
+              <div className={`card ${view === 'actual' ? 'border-gold-dim' : ''}`}>
+                <div className="text-xs text-text-muted mb-1">Obligations</div>
+                <div className="font-mono text-xl text-ivory">{trillions(totalObligated)}</div>
+              </div>
+              <div className="card">
+                <div className="text-xs text-text-muted mb-1">Outlays</div>
+                <div className="font-mono text-xl text-ivory">{trillions(totalOutlays)}</div>
+              </div>
+            </div>
+            <p className="text-sm text-text-secondary mb-4">FY{spending?.fiscalYear} {view === 'actual' ? '— Obligations with budget comparison' : '— Budget authority with obligation rates'}</p>
+            <div className="space-y-2">
+              <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
+                <div className="col-span-3">Agency</div>
+                <div className="col-span-2 text-right">{view === 'actual' ? 'Obligations' : 'Budget Auth'}</div>
+                <div className="col-span-2 text-right">{view === 'actual' ? 'Outlays' : 'Obligations'}</div>
+                <div className="col-span-3 text-right">{view === 'actual' ? 'vs Budget' : 'Obligation Rate'}</div>
+                <div className="col-span-2 text-right">% of Total</div>
+              </div>
+              {sorted.map((a, i) => {
+                const primary = view === 'budget' ? (a.budget || 0) : (a.obligated || 0)
+                const secondary = view === 'budget' ? (a.obligated || 0) : (a.outlays || 0)
+                const total = view === 'budget' ? totalBudget : totalObligated
+                const pctOfTotal = total > 0 ? ((primary / total) * 100).toFixed(1) : '0.0'
+                let comparison = null
+                if (view === 'actual' && a.budget && a.budget > 0) {
+                  const usedPct = ((a.obligated || 0) / a.budget) * 100
+                  const color = usedPct > 90 ? 'text-crimson' : usedPct > 70 ? 'text-gold' : 'text-positive'
+                  comparison = <span className={`font-mono text-sm ${color}`}>{usedPct.toFixed(0)}% used</span>
+                } else if (view === 'budget' && a.budget && a.budget > 0) {
+                  const rate = ((a.obligated || 0) / a.budget) * 100
+                  const color = rate > 90 ? 'text-crimson' : rate > 70 ? 'text-gold' : 'text-positive'
+                  comparison = <div className="flex items-center justify-end gap-2"><div className="w-16 h-1.5 bg-surface-elevated rounded-full overflow-hidden"><div className={`h-full rounded-full ${rate > 90 ? 'bg-crimson' : rate > 70 ? 'bg-gold' : 'bg-positive'}`} style={{ width: `${Math.min(rate, 100)}%` }} /></div><span className={`font-mono text-sm ${color}`}>{rate.toFixed(0)}%</span></div>
+                }
+                return (
+                  <div key={i} className="card grid grid-cols-12 gap-4 items-center hover:border-gold-dim transition-colors">
+                    <div className="col-span-3">
+                      <div className="text-sm text-ivory">{a.name}</div>
+                      {a.abbreviation && <div className="text-[10px] text-text-muted font-mono">{a.abbreviation}</div>}
+                    </div>
+                    <div className="col-span-2 text-right font-mono text-sm text-ivory">{billions(primary)}</div>
+                    <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{billions(secondary)}</div>
+                    <div className="col-span-3 text-right">{comparison || <span className="text-text-muted text-sm">--</span>}</div>
+                    <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{pctOfTotal}%</div>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+      </div>
+    )
+  }
 
 // ════════════════════════════════════════════════════
 // Cash Balance Chart
