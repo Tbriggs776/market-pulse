@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import Watchlist from './pages/Watchlist'
 import Research from './pages/Research'
 import Government from './pages/Government'
+import Advisor from './pages/Advisor'
 import Login from './pages/Login'
 import { RefreshCw } from 'lucide-react'
 
@@ -55,7 +56,7 @@ function AppRoutes() {
         <Route path="watchlist" element={<Watchlist />} />
         <Route path="research" element={<Research />} />
         <Route path="government" element={<Government />} />
-        <Route path="advisor" element={<Placeholder name="Advisor" />} />
+        <Route path="advisor" element={<Advisor />} />
       </Route>
     </Routes>
   )
