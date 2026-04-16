@@ -486,7 +486,6 @@ function CashFlowStatement() {
 // ════════════════════════════════════════════════════
 
   function SpendingTab() {
-    const [view, setView] = useState('actual')
     const { data: spending, isLoading, error, isFetching, refetch } = useQuery({
       queryKey: ['spending-data'],
       queryFn: spendingService.getSpendingOverview,
@@ -500,34 +499,29 @@ function CashFlowStatement() {
 
     return (
       <div className="space-y-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center bg-surface-elevated rounded-lg p-0.5 border border-border">
-            <button onClick={() => setView('actual')} className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${view === 'actual' ? 'bg-gold/20 text-gold border border-gold-dim' : 'text-text-secondary hover:text-ivory'}`}>Actual to Date</button>
-            <button onClick={() => setView('budget')} className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all ${view === 'budget' ? 'bg-gold/20 text-gold border border-gold-dim' : 'text-text-secondary hover:text-ivory'}`}>Budget Authority</button>
-          </div>
+        <div className="flex justify-end">
           <button onClick={() => refetch()} disabled={isFetching} className="btn-secondary">
             <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
           </button>
         </div>
         {totalSpending > 0 && (
           <div className="card-elevated">
-            <div className="text-xs text-text-muted mb-1">{view === 'actual' ? `Actual Federal Spending (FY${spending?.fiscalYear})` : `Budget Authority (FY${spending?.fiscalYear})`}</div>
+            <div className="text-xs text-text-muted mb-1">Total Federal Spending (FY{spending?.fiscalYear})</div>
             <div className="font-mono text-3xl text-ivory">{trillions(totalSpending)}</div>
-            {view === 'actual' && <div className="text-xs text-text-muted mt-1">Obligations through latest reporting period</div>}
-            {view === 'budget' && <div className="text-xs text-text-muted mt-1">See Departments tab for agency-level budget authority</div>}
+            <div className="text-xs text-text-muted mt-1">Actual obligations through latest reporting period</div>
           </div>
         )}
         {spending?.budgetFunctions && spending.budgetFunctions.length > 0 && (
           <section>
             <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
-              <PiggyBank className="w-5 h-5 text-gold" /> {view === 'actual' ? 'Spending by Budget Function' : 'Budget Authority by Function'}
+              <PiggyBank className="w-5 h-5 text-gold" /> Spending by Budget Function
             </h2>
             <div className="space-y-2">
               <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
                 <div className="col-span-5">Function</div>
-                <div className="col-span-3 text-right">{view === 'actual' ? 'Actual' : 'Budget'}</div>
+                <div className="col-span-3 text-right">Amount</div>
                 <div className="col-span-2 text-right">% of Total</div>
-                <div className="col-span-2 text-right">{view === 'actual' ? 'vs Budget' : 'vs Actual'}</div>
+                <div className="col-span-2 text-right">YoY Change</div>
               </div>
               {spending.budgetFunctions.map((b, i) => {
                 const pct = totalSpending > 0 ? (b.amount / totalSpending) * 100 : 0
@@ -541,7 +535,9 @@ function CashFlowStatement() {
                     </div>
                     <div className="col-span-3 text-right font-mono text-sm text-ivory">{billions(b.amount)}</div>
                     <div className="col-span-2 text-right font-mono text-sm text-text-secondary">{pct.toFixed(1)}%</div>
-                    <div className="col-span-2 text-right"><span className="text-text-muted text-xs">--</span></div>
+                    <div className="col-span-2 text-right">
+                      {b.yoyChange != null ? <span className={`font-mono text-sm ${b.yoyChange >= 0 ? 'text-crimson' : 'text-positive'}`}>{fmtPct(b.yoyChange)}</span> : <span className="text-text-muted text-sm">--</span>}
+                    </div>
                   </div>
                 )
               })}
