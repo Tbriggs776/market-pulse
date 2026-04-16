@@ -1,11 +1,11 @@
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
+import Watchlist from './pages/Watchlist'
 
 /**
- * Pass 3: Dashboard is real. Other pages still placeholders until
- * their respective passes (Watchlist: Pass 4, Research: Pass 5,
- * Government: Pass 6, Advisor: Pass 7).
+ * Pass 4: Dashboard + Watchlist are real. Research, Government,
+ * and Advisor still placeholders until their respective passes.
  */
 function Placeholder({ name }) {
   return (
@@ -25,7 +25,7 @@ function App() {
     <Routes>
       <Route path="/" element={<Layout />}>
         <Route index element={<Dashboard />} />
-        <Route path="watchlist" element={<Placeholder name="Watchlist" />} />
+        <Route path="watchlist" element={<Watchlist />} />
         <Route path="research" element={<Placeholder name="Research" />} />
         <Route path="government" element={<Placeholder name="Government" />} />
         <Route path="advisor" element={<Placeholder name="Advisor" />} />
