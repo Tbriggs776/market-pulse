@@ -6,6 +6,7 @@ import NewsCard from '../components/news/NewsCard'
 import NewsCardSkeleton from '../components/news/NewsCardSkeleton'
 import AIBriefing from '../components/dashboard/AIBriefing'
 import { useAuth } from '../contexts/AuthContext'
+import { useAnonymousStore } from '../contexts/AnonymousStoreContext'
 
 const TABS = [
   { id: 'all', label: 'All', icon: Globe },
@@ -17,7 +18,9 @@ const TABS = [
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('all')
   const { profile } = useAuth()
-  const state = profile?.state || 'Arizona'
+  const { isAnonymous } = useAuth()
+  const { state: anonState } = useAnonymousStore()
+  const state = isAnonymous ? anonState : (profile?.state || 'Arizona')
 
   // Update local tab label to match user's state
   const tabs = TABS.map((t) =>

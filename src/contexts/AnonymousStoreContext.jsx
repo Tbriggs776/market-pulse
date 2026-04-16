@@ -3,9 +3,11 @@ import { createContext, useContext, useState, useCallback } from 'react'
 const AnonymousStoreContext = createContext(null)
 
 const MAX_ANONYMOUS_TICKERS = 5
+const DEFAULT_STATE = 'Arizona'
 
 export function AnonymousStoreProvider({ children }) {
   const [watchlist, setWatchlist] = useState([])
+  const [state, setState] = useState(DEFAULT_STATE)
 
   const addTicker = useCallback((ticker) => {
     setWatchlist((prev) => {
@@ -29,7 +31,10 @@ export function AnonymousStoreProvider({ children }) {
   const atCap = watchlist.length >= MAX_ANONYMOUS_TICKERS
 
   return (
-    <AnonymousStoreContext.Provider value={{ watchlist, addTicker, removeTicker, canAdd, atCap, maxTickers: MAX_ANONYMOUS_TICKERS }}>
+    <AnonymousStoreContext.Provider value={{
+      watchlist, addTicker, removeTicker, canAdd, atCap, maxTickers: MAX_ANONYMOUS_TICKERS,
+      state, setState,
+    }}>
       {children}
     </AnonymousStoreContext.Provider>
   )
