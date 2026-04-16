@@ -1,5 +1,5 @@
 /**
- * Advisor Service -- streaming chat + conversation management
+ * Advisor Service -- streaming chat + conversation management (Pass 7B)
  */
 import { supabase } from '../supabase'
 
@@ -50,12 +50,10 @@ async function renameConversation(conversationId, title) {
 }
 
 /**
- * Send a message and stream the assistant reply.
- * onDelta(text) called for each streamed chunk.
- * onMeta({ conversationId }) called once with conv id (matters when starting new conv).
- * Returns Promise resolving to final { conversationId, assistantText } when stream completes.
+ * Streaming advisor call with tool-use support.
+ * Callbacks: onMeta, onDelta, onToolCall, onToolResult, onError, onDone
  */
-async function sendMessage({ conversationId, userMessage, modelKey = 'sonnet', onDelta, onMeta }) {
+async function sendMessage({ conversationId, userMessage, modelKey = 'sonnet', onDelta, onMeta, onToolCall, onToolResult, onError, onDone }) {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session?.access_token) throw new Error('Not authenticated')
 
@@ -104,13 +102,17 @@ async function sendMessage({ conversationId, userMessage, modelKey = 'sonnet', o
         } else if (eventName === 'delta') {
           assistantText += payload.text || ''
           if (onDelta) onDelta(payload.text || '')
+        } else if (eventName === 'tool_call') {
+          if (onToolCall) onToolCall(payload)
+        } else if (eventName === 'tool_result') {
+          if (onToolResult) onToolResult(payload)
         } else if (eventName === 'error') {
-          throw new Error(payload.error || 'Stream error')
+          if (onError) onError(payload.error || 'Stream error')
         } else if (eventName === 'done') {
-          // noop
+          if (onDone) onDone(payload)
         }
       } catch (e) {
-        // ignore parse errors on partial lines
+        // ignore
       }
     }
   }
