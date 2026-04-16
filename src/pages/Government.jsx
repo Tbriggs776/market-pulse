@@ -6,7 +6,7 @@ import {
   LayoutDashboard, PiggyBank, Building2, FileSpreadsheet,
   ArrowUpRight, ArrowDownRight, Receipt, Wallet, Banknote
 , ChevronDown, ChevronRight } from 'lucide-react'
-import { treasuryService, spendingService, statementsService } from '../lib/api'
+import { treasuryService, spendingService, statementsService, budgetService } from '../lib/api'
 
 const GOV_TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -184,46 +184,124 @@ function FinancialStatements() {
 
 // --- Income Statement ---
 function IncomeStatement() {
-  const { data, isLoading, error } = useQuery({
+  const actualsQ = useQuery({
     queryKey: ['treasury-statements', 'income'],
     queryFn: statementsService.getIncomeStatement,
     staleTime: 30 * 60 * 1000, gcTime: 2 * 60 * 60 * 1000, refetchOnWindowFocus: false,
   })
+  const budgetQ = useQuery({
+    queryKey: ['budget-baseline', 2026],
+    queryFn: () => budgetService.getBaseline(2026),
+    staleTime: 24 * 60 * 60 * 1000, gcTime: 7 * 24 * 60 * 60 * 1000, refetchOnWindowFocus: false,
+  })
 
-  if (isLoading) return <LoadingSkeleton />
-  if (error) return <ErrorCard message={error.message} />
+  if (actualsQ.isLoading) return <LoadingSkeleton />
+  if (actualsQ.error) return <ErrorCard message={actualsQ.error.message} />
 
-  const totalRevenue = data?.revenue?.sources?.reduce((s, r) => s + r.fytdAmount, 0) || 0
-  const totalOutlays = data?.outlays?.categories?.reduce((s, o) => s + o.fytdAmount, 0) || 0
+  const data = actualsQ.data
+  const budget = budgetQ.data
+
+  // Fiscal year starts Oct 1. Expected pace = months elapsed / 12.
+  const now = new Date()
+  const fyMonth = ((now.getMonth() + 3) % 12) + 1
+  const dayOfFyMonth = now.getDate()
+  const daysInFyMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  const expectedPacePct = ((fyMonth - 1 + dayOfFyMonth / daysInFyMonth) / 12) * 100
+
+  // Filter out MTS subtotal/total rows from line items.
+  // These roll up other rows and would double-count if included.
+  const isSubtotal = (name) => /^(Total\b|Total--)/i.test(name || '')
+  const revenueDetail = (data?.revenue?.sources || []).filter((r) => !isSubtotal(r.category))
+  const outlayDetail = (data?.outlays?.categories || []).filter((o) => !isSubtotal(o.category))
+
+  // Pull authoritative totals from MTS subtotal rows (more accurate than summing details).
+  const totalReceiptsRow = (data?.revenue?.sources || []).find((r) => /^Total Receipts\b/i.test(r.category))
+  const totalOutlaysRow = (data?.outlays?.categories || []).find((o) => /^Total Outlays\b/i.test(o.category))
+  const totalRevenue = totalReceiptsRow?.fytdAmount ?? revenueDetail.reduce((s, r) => s + (r.fytdAmount || 0), 0)
+  const totalOutlays = totalOutlaysRow?.fytdAmount ?? outlayDetail.reduce((s, o) => s + (o.fytdAmount || 0), 0)
   const netIncome = totalRevenue - totalOutlays
+
+  const projectedReceipts = budget?.totalReceipts || 0
+  const projectedOutlays = budget?.totalOutlays || 0
+  const projectedDeficit = budget?.projectedDeficit || 0
+  const actualDeficit = totalOutlays - totalRevenue
+
+  // Rate of consumption vs expected pace
+  const receiptsPct = projectedReceipts > 0 ? (totalRevenue / projectedReceipts) * 100 : 0
+  const outlaysPct = projectedOutlays > 0 ? (totalOutlays / projectedOutlays) * 100 : 0
+  const deficitPct = projectedDeficit > 0 ? (actualDeficit / projectedDeficit) * 100 : 0
+
+  const pacingStatus = (pct) => {
+    const delta = pct - expectedPacePct
+    if (delta > 8) return { label: 'Ahead', color: 'text-gold-bright' }
+    if (delta < -8) return { label: 'Behind', color: 'text-text-muted' }
+    return { label: 'On Pace', color: 'text-positive' }
+  }
+
+  const BudgetCard = ({ label, projected, actual, pct, tone, inverted }) => {
+    const pace = pacingStatus(pct)
+    return (
+      <div className="card-elevated">
+        <div className="text-xs text-text-muted mb-2 uppercase tracking-wide">{label}</div>
+        <div className="flex items-baseline justify-between mb-3">
+          <div>
+            <div className={`font-mono text-2xl ${tone}`}>{billions(actual)}</div>
+            <div className="text-[10px] text-text-muted mt-0.5">Actual FYTD</div>
+          </div>
+          <div className="text-right">
+            <div className="font-mono text-sm text-text-secondary">{billions(projected)}</div>
+            <div className="text-[10px] text-text-muted mt-0.5">FY Projected</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mb-1">
+          <div className="flex-1 h-1.5 bg-surface-elevated rounded-full overflow-hidden">
+            <div className={`h-full rounded-full ${inverted ? 'bg-crimson' : 'bg-positive'}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+          </div>
+          <span className="font-mono text-xs text-ivory shrink-0">{pct.toFixed(0)}%</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className={`text-[10px] font-mono ${pace.color}`}>{pace.label}</span>
+          <span className="text-[10px] text-text-muted">vs {expectedPacePct.toFixed(0)}% expected</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8">
-      {/* Summary cards */}
+      {/* Budget vs Actual summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="card-elevated">
-          <div className="text-xs text-text-muted mb-1">FYTD Revenue</div>
-          <div className="font-mono text-2xl text-positive">{billions(totalRevenue)}</div>
-          {data?.revenue && <div className="text-[10px] text-text-muted mt-1">FY{data.revenue.fiscalYear} through M{data.revenue.month}</div>}
-        </div>
-        <div className="card-elevated">
-          <div className="text-xs text-text-muted mb-1">FYTD Outlays</div>
-          <div className="font-mono text-2xl text-crimson">{billions(totalOutlays)}</div>
-        </div>
-        <div className="card-elevated">
-          <div className="text-xs text-text-muted mb-1">Net Income (Loss)</div>
-          <div className={`font-mono text-2xl ${netIncome >= 0 ? 'text-positive' : 'text-crimson'}`}>{billions(Math.abs(netIncome))}</div>
-          <div className="text-[10px] text-text-muted mt-1">{netIncome >= 0 ? 'Surplus' : 'Deficit'}</div>
-        </div>
+        <BudgetCard label="Receipts" projected={projectedReceipts} actual={totalRevenue} pct={receiptsPct} tone="text-positive" inverted={false} />
+        <BudgetCard label="Outlays" projected={projectedOutlays} actual={totalOutlays} pct={outlaysPct} tone="text-crimson" inverted={true} />
+        <BudgetCard label={netIncome >= 0 ? 'Surplus' : 'Deficit'} projected={projectedDeficit} actual={Math.abs(actualDeficit)} pct={deficitPct} tone={netIncome >= 0 ? 'text-positive' : 'text-crimson'} inverted={true} />
       </div>
 
-      {/* Revenue by Source */}
-      {data?.revenue?.sources && data.revenue.sources.length > 0 && (
+      {/* Source attribution */}
+      {budget && (
+        <div className="card border-gold-dim bg-gold/5">
+          <div className="flex items-start gap-3">
+            <Sparkles className="w-4 h-4 text-gold shrink-0 mt-0.5" />
+            <div className="text-xs text-text-secondary leading-relaxed">
+              <span className="text-ivory font-medium">FY{budget.fiscalYear} Budget vs Actual.</span>
+              <span> Expected pace at this point in the fiscal year: </span>
+              <span className="text-gold font-mono">{expectedPacePct.toFixed(0)}%</span>
+              <span> ({Math.max(0, 12 - fyMonth + 1)} months remaining). </span>
+              <span className="text-text-muted">Projections: CBO Budget and Economic Outlook, {budget.publishedDate}. Actuals: Treasury Monthly Treasury Statement.</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revenue detail by MTS source */}
+      {revenueDetail.length > 0 && (
         <section>
-          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
-            <ArrowUpRight className="w-5 h-5 text-positive" />
-            Revenue by Source
-          </h2>
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory">
+              <ArrowUpRight className="w-5 h-5 text-positive" />
+              Revenue Detail
+            </h2>
+            <span className="text-[10px] text-text-muted uppercase tracking-wide">MTS by Source</span>
+          </div>
           <div className="space-y-2">
             <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
               <div className="col-span-5">Source</div>
@@ -232,7 +310,7 @@ function IncomeStatement() {
               <div className="col-span-2 text-right">Prior FYTD</div>
               <div className="col-span-1 text-right">YoY</div>
             </div>
-            {data.revenue.sources.map((s, i) => {
+            {revenueDetail.map((s, i) => {
               const yoy = s.priorFytd > 0 ? ((s.fytdAmount - s.priorFytd) / s.priorFytd) * 100 : null
               return (
                 <div key={i} className="card grid grid-cols-12 gap-4 items-center">
@@ -250,13 +328,16 @@ function IncomeStatement() {
         </section>
       )}
 
-      {/* Outlays by Category */}
-      {data?.outlays?.categories && data.outlays.categories.length > 0 && (
+      {/* Outlay detail by MTS agency/account */}
+      {outlayDetail.length > 0 && (
         <section>
-          <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory mb-4">
-            <ArrowDownRight className="w-5 h-5 text-crimson" />
-            Outlays by Category
-          </h2>
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-ivory">
+              <ArrowDownRight className="w-5 h-5 text-crimson" />
+              Outlay Detail
+            </h2>
+            <span className="text-[10px] text-text-muted uppercase tracking-wide">MTS by Agency / Account</span>
+          </div>
           <div className="space-y-2">
             <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
               <div className="col-span-5">Category</div>
@@ -265,7 +346,7 @@ function IncomeStatement() {
               <div className="col-span-2 text-right">Prior FYTD</div>
               <div className="col-span-1 text-right">YoY</div>
             </div>
-            {data.outlays.categories.map((o, i) => {
+            {outlayDetail.map((o, i) => {
               const yoy = o.priorFytd > 0 ? ((o.fytdAmount - o.priorFytd) / o.priorFytd) * 100 : null
               return (
                 <div key={i} className="card grid grid-cols-12 gap-4 items-center">
@@ -285,7 +366,6 @@ function IncomeStatement() {
     </div>
   )
 }
-
 // --- Balance Sheet ---
 function BalanceSheet() {
   const { data, isLoading, error } = useQuery({
