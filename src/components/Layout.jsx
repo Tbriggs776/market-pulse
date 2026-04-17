@@ -1,7 +1,8 @@
-import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Outlet, NavLink, useNavigate, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Star, Search, Landmark, Bot,
-  MapPin, LogOut, LogIn,
+  LogOut, LogIn, Menu, X,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import GuestRibbon from './GuestRibbon'
@@ -41,10 +42,16 @@ function BrandMark() {
 }
 
 export default function Layout() {
-  const { user, profile, signOut, isAnonymous } = useAuth()
+  const { profile, signOut, isAnonymous } = useAuth()
   const navigate = useNavigate()
-  const userState = profile?.state || 'Arizona'
+  const location = useLocation()
+  const [mobileOpen, setMobileOpen] = useState(false)
   const displayName = profile?.display_name || profile?.email || ''
+
+  // Auto-close mobile drawer when route changes
+  useEffect(() => {
+    setMobileOpen(false)
+  }, [location.pathname])
 
   async function handleSignOut() {
     await signOut()
@@ -56,9 +63,10 @@ export default function Layout() {
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
       <header className="sticky top-0 z-50 bg-canvas/95 backdrop-blur border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
           <BrandMark />
 
+          {/* Desktop nav */}
           <nav className="hidden md:flex items-center gap-1" role="navigation">
             {navItems.map((item) => (
               <NavLink
@@ -79,13 +87,13 @@ export default function Layout() {
             ))}
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <div className="hidden sm:block"><StatePicker /></div>
 
             {isAnonymous ? (
-              <Link to="/login" className="btn-primary text-xs px-3 py-1.5 inline-flex items-center gap-1.5">
+              <Link to="/login" className="btn-primary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 shrink-0">
                 <LogIn className="w-3.5 h-3.5" />
-                Sign in
+                <span className="hidden sm:inline">Sign in</span>
               </Link>
             ) : (
               displayName && (
@@ -103,8 +111,49 @@ export default function Layout() {
                 </div>
               )
             )}
+
+            {/* Hamburger -- mobile only */}
+            <button
+              onClick={() => setMobileOpen((v) => !v)}
+              className="md:hidden btn-ghost p-2"
+              aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={mobileOpen}
+            >
+              {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
           </div>
         </div>
+
+        {/* Mobile drawer */}
+        {mobileOpen && (
+          <div className="md:hidden border-t border-border bg-canvas/95 backdrop-blur">
+            <nav className="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-1" role="navigation">
+              {navItems.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/dashboard'}
+                  onClick={() => setMobileOpen(false)}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors ${
+                      isActive
+                        ? 'text-gold bg-gold/10'
+                        : 'text-text-secondary hover:text-ivory hover:bg-surface'
+                    }`
+                  }
+                >
+                  <item.icon className="w-4 h-4" aria-hidden="true" />
+                  <span>{item.label}</span>
+                </NavLink>
+              ))}
+              {/* State picker on mobile lives in the drawer */}
+              <div className="sm:hidden pt-3 mt-1 border-t border-border flex items-center justify-between gap-3">
+                <span className="text-[10px] uppercase tracking-wide text-text-muted px-3">Your state</span>
+                <StatePicker />
+              </div>
+            </nav>
+          </div>
+        )}
       </header>
 
       {isAnonymous && <GuestRibbon />}
@@ -114,7 +163,7 @@ export default function Layout() {
       </main>
 
       <footer className="border-t border-border py-6">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between text-xs text-text-muted">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-text-muted">
           <div className="flex items-center gap-2">
             <span className="font-serif text-[10px] tracking-[0.2em] text-gold/60">
               MARKET PULSE
