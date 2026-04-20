@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import {
   Plus, Trash2, TrendingUp, TrendingDown,
-  PieChart, RefreshCw, ChevronRight, ChevronDown,
+  PieChart, RefreshCw, ChevronRight, ChevronDown, Receipt,
 } from 'lucide-react'
 import { stocksService, metadataService } from '../lib/api'
 import { portfolioApi } from '../lib/supabase'
@@ -442,6 +443,7 @@ export default function Portfolio() {
                 {isExpanded && (
                   <LotDetail
                     lots={lots}
+                    symbol={p.symbol}
                     currentPrice={price}
                     formatPrice={formatPrice}
                     formatShares={formatShares}
@@ -458,7 +460,7 @@ export default function Portfolio() {
   )
 }
 
-function LotDetail({ lots, currentPrice, formatPrice, formatShares, formatPercent, formatSignedDollar }) {
+function LotDetail({ lots, symbol, currentPrice, formatPrice, formatShares, formatPercent, formatSignedDollar }) {
   if (!lots || lots.length === 0) {
     return (
       <div className="border-t border-border px-5 py-3 text-xs text-text-muted">
@@ -475,8 +477,20 @@ function LotDetail({ lots, currentPrice, formatPrice, formatShares, formatPercen
   return (
     <div className="border-t border-border bg-surface/40">
       <div className="px-5 py-3">
-        <div className="text-[10px] uppercase tracking-wide text-text-muted mb-2">
-          Lots ({lots.length})
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[10px] uppercase tracking-wide text-text-muted">
+            Lots ({lots.length})
+          </div>
+          {symbol && (
+            <Link
+              to={`/transactions?symbol=${symbol}`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-[10px] uppercase tracking-wide text-gold hover:text-gold-bright flex items-center gap-1"
+            >
+              <Receipt className="w-3 h-3" />
+              See transactions
+            </Link>
+          )}
         </div>
         <div className="grid grid-cols-12 gap-4 py-1.5 text-[10px] text-text-muted uppercase tracking-wide">
           <div className="col-span-3">Bought</div>
