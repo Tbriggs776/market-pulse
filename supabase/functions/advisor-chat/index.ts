@@ -20,8 +20,9 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 
 // Position engine: mirrors src/lib/positionEngine.js. Keep in sync when
-// adding new transaction types.
+// adding new transaction types or lot methods.
 const CLOSED_EPSILON = 1e-8
+const LONG_TERM_DAYS = 365
 
 interface Txn {
   symbol: string
@@ -33,7 +34,26 @@ interface Txn {
   total_amount?: number | string | null
   occurred_at: string
   notes?: string | null
+  lot_method?: string | null
   created_at?: string | null
+  id?: string | null
+}
+
+interface OpenLot {
+  buyDate: string
+  shares: number
+  costBasis: number
+  txnId: string | null
+}
+
+interface LotDetail {
+  buy_date: string
+  shares: number
+  cost_basis_per_share: number
+  total_cost: number
+  days_held: number
+  term: 'short' | 'long'
+  txn_id: string | null
 }
 
 interface DerivedPosition {
@@ -46,9 +66,82 @@ interface DerivedPosition {
   purchase_date: string | null
   notes: string | null
   realized_pnl: number
+  realized_pnl_short: number
+  realized_pnl_long: number
   total_dividends: number
+  lots: LotDetail[]
+  shares_short: number
+  shares_long: number
+  cost_basis_short: number
+  cost_basis_long: number
   created_at: string | null
   updated_at: string | null
+}
+
+function daysBetween(fromISO: string, toISO: string): number {
+  if (!fromISO) return 0
+  const a = new Date(fromISO).getTime()
+  const b = new Date(toISO).getTime()
+  return Math.floor((b - a) / (1000 * 60 * 60 * 24))
+}
+
+function defaultLotMethod(assetType: string): string {
+  return assetType === 'mutual_fund' ? 'average_cost' : 'fifo'
+}
+
+function resolveLotMethod(txn: Txn, assetType: string): string {
+  if (!txn.lot_method) return 'average_cost' // legacy sells
+  const m = String(txn.lot_method).toLowerCase()
+  if (m === 'fifo' || m === 'average_cost') return m
+  return defaultLotMethod(assetType)
+}
+
+function consumeFifo(openLots: OpenLot[], shares: number, sellPrice: number, sellDate: string) {
+  let remaining = shares
+  let realizedShort = 0
+  let realizedLong = 0
+  while (remaining > CLOSED_EPSILON && openLots.length > 0) {
+    const lot = openLots[0]
+    const take = Math.min(lot.shares, remaining)
+    const gain = (sellPrice - lot.costBasis) * take
+    const held = daysBetween(lot.buyDate, sellDate)
+    if (held > LONG_TERM_DAYS) realizedLong += gain
+    else realizedShort += gain
+    lot.shares -= take
+    remaining -= take
+    if (lot.shares <= CLOSED_EPSILON) openLots.shift()
+  }
+  return { realizedShort, realizedLong }
+}
+
+function consumeAverageCost(openLots: OpenLot[], shares: number, sellPrice: number, sellDate: string) {
+  let totalShares = 0
+  let totalCost = 0
+  for (const lot of openLots) {
+    totalShares += lot.shares
+    totalCost += lot.shares * lot.costBasis
+  }
+  if (totalShares <= CLOSED_EPSILON) {
+    return { realizedShort: 0, realizedLong: 0 }
+  }
+  const avgBasis = totalCost / totalShares
+  const actualSold = Math.min(shares, totalShares)
+
+  let realizedShort = 0
+  let realizedLong = 0
+  for (const lot of openLots) {
+    const proportion = lot.shares / totalShares
+    const lotSharesSold = actualSold * proportion
+    const lotGain = (sellPrice - avgBasis) * lotSharesSold
+    const held = daysBetween(lot.buyDate, sellDate)
+    if (held > LONG_TERM_DAYS) realizedLong += lotGain
+    else realizedShort += lotGain
+    lot.shares -= lotSharesSold
+  }
+  for (let i = openLots.length - 1; i >= 0; i--) {
+    if (openLots[i].shares <= CLOSED_EPSILON) openLots.splice(i, 1)
+  }
+  return { realizedShort, realizedLong }
 }
 
 function computePositionsFromTransactions(transactions: Txn[]): DerivedPosition[] {
@@ -60,7 +153,9 @@ function computePositionsFromTransactions(transactions: Txn[]): DerivedPosition[
     groups.get(key)!.push(t)
   }
 
+  const today = new Date().toISOString().slice(0, 10)
   const positions: DerivedPosition[] = []
+
   for (const [key, txns] of groups) {
     txns.sort((a, b) => {
       const da = new Date(a.occurred_at).getTime()
@@ -71,9 +166,9 @@ function computePositionsFromTransactions(transactions: Txn[]): DerivedPosition[
       return ca - cb
     })
 
-    let shares = 0
-    let avgCost = 0
-    let realizedPnl = 0
+    const openLots: OpenLot[] = []
+    let realizedShort = 0
+    let realizedLong = 0
     let totalDividends = 0
     let firstBuyDate: string | null = null
     let latestTouch: number | null = null
@@ -90,44 +185,82 @@ function computePositionsFromTransactions(transactions: Txn[]): DerivedPosition[
         const buyShares = Number(t.shares) || 0
         const buyPrice = Number(t.price_per_share) || 0
         if (buyShares <= 0) continue
-        const newShares = shares + buyShares
-        const baseCost = shares > CLOSED_EPSILON ? shares * avgCost : 0
-        avgCost = newShares > 0 ? (baseCost + buyShares * buyPrice) / newShares : 0
-        shares = newShares
+        openLots.push({
+          buyDate: t.occurred_at,
+          shares: buyShares,
+          costBasis: buyPrice,
+          txnId: t.id || null,
+        })
         if (!firstBuyDate) firstBuyDate = t.occurred_at
       } else if (t.transaction_type === 'sell') {
         const sellShares = Number(t.shares) || 0
         const sellPrice = Number(t.price_per_share) || 0
         if (sellShares <= 0) continue
-        const actualSold = Math.min(sellShares, shares)
-        realizedPnl += (sellPrice - avgCost) * actualSold
-        shares -= actualSold
-        if (shares <= CLOSED_EPSILON) {
-          shares = 0
-          avgCost = 0
-        }
+        const [_, assetType] = key.split(':')
+        const method = resolveLotMethod(t, assetType)
+        const { realizedShort: rs, realizedLong: rl } = method === 'fifo'
+          ? consumeFifo(openLots, sellShares, sellPrice, t.occurred_at)
+          : consumeAverageCost(openLots, sellShares, sellPrice, t.occurred_at)
+        realizedShort += rs
+        realizedLong += rl
       } else if (t.transaction_type === 'dividend') {
         totalDividends += Number(t.total_amount) || 0
       }
     }
 
-    if (shares > CLOSED_EPSILON) {
-      const [symbol, assetType] = key.split(':')
-      positions.push({
-        id: key,
-        symbol,
-        asset_type: assetType,
-        name: name || '',
-        shares,
-        cost_basis_per_share: avgCost,
-        purchase_date: firstBuyDate,
-        notes: latestNotes,
-        realized_pnl: realizedPnl,
-        total_dividends: totalDividends,
-        created_at: firstBuyDate,
-        updated_at: latestTouch ? new Date(latestTouch).toISOString() : null,
-      })
-    }
+    const totalShares = openLots.reduce((s, l) => s + l.shares, 0)
+    if (totalShares <= CLOSED_EPSILON) continue
+
+    const totalCost = openLots.reduce((s, l) => s + l.shares * l.costBasis, 0)
+    const avgCost = totalShares > 0 ? totalCost / totalShares : 0
+
+    let sharesShort = 0
+    let sharesLong = 0
+    let costBasisShort = 0
+    let costBasisLong = 0
+    const lotsDetail: LotDetail[] = openLots.map((lot) => {
+      const held = daysBetween(lot.buyDate, today)
+      const term: 'short' | 'long' = held > LONG_TERM_DAYS ? 'long' : 'short'
+      if (term === 'long') {
+        sharesLong += lot.shares
+        costBasisLong += lot.shares * lot.costBasis
+      } else {
+        sharesShort += lot.shares
+        costBasisShort += lot.shares * lot.costBasis
+      }
+      return {
+        buy_date: lot.buyDate,
+        shares: lot.shares,
+        cost_basis_per_share: lot.costBasis,
+        total_cost: lot.shares * lot.costBasis,
+        days_held: held,
+        term,
+        txn_id: lot.txnId,
+      }
+    })
+
+    const [symbol, assetType] = key.split(':')
+    positions.push({
+      id: key,
+      symbol,
+      asset_type: assetType,
+      name: name || '',
+      shares: totalShares,
+      cost_basis_per_share: avgCost,
+      purchase_date: firstBuyDate,
+      notes: latestNotes,
+      realized_pnl: realizedShort + realizedLong,
+      realized_pnl_short: realizedShort,
+      realized_pnl_long: realizedLong,
+      total_dividends: totalDividends,
+      lots: lotsDetail,
+      shares_short: sharesShort,
+      shares_long: sharesLong,
+      cost_basis_short: costBasisShort,
+      cost_basis_long: costBasisLong,
+      created_at: firstBuyDate,
+      updated_at: latestTouch ? new Date(latestTouch).toISOString() : null,
+    })
   }
 
   positions.sort((a, b) => {
@@ -140,7 +273,9 @@ function computePositionsFromTransactions(transactions: Txn[]): DerivedPosition[
 
 const SYSTEM_PROMPT_BASE = `You are the Market Pulse Advisor, a portfolio-aware financial research assistant built for a fractional CFO and investor. You operate with two modes and pick the right one based on the question:
 
-PORTFOLIO CFO MODE (default when user asks about their positions, allocation, sizing, exposure, or "should I"): concise, data-forward, institutional tone. Cite specific tickers from the user's portfolio and watchlist by name. Reference current macro data when relevant. Give concrete recommendations with reasoning, not hedged advice. You can be direct about concerns. When the user asks about their holdings, allocation, sector exposure, or concentration, call get_portfolio to pull live values, gain/loss, and sector breakdown -- don't make quantitative claims off the light snapshot alone.
+PORTFOLIO CFO MODE (default when user asks about their positions, allocation, sizing, exposure, or "should I"): concise, data-forward, institutional tone. Cite specific tickers from the user's portfolio and watchlist by name. Reference current macro data when relevant. Give concrete recommendations with reasoning, not hedged advice. You can be direct about concerns. When the user asks about their holdings, allocation, sector exposure, or concentration, call get_portfolio to pull live values, gain/loss, lot-level detail, and sector breakdown -- don't make quantitative claims off the light snapshot alone.
+
+TAX-AWARE SELLING: get_portfolio returns per-position lot detail (buy date, cost basis, days held, short vs long term) and ST/LT realized + unrealized splits. When proposing a sell or trim, look at the lots: long-term gains are usually taxed at lower rates than short-term. If one method materially differs from another, call it out in the rationale and set lotMethod on the change. FIFO is the default for stock/etf, average_cost for mutual_fund (and is legally required for mutual_fund). If a short-term lot is within weeks of crossing one year, mention it rather than proposing an immediate sale.
 
 RESEARCH COPILOT MODE (when user is exploring a thesis, asking "what do you think about X," or working through an analysis): Socratic, exploratory, suggest angles they haven't considered, play devil's advocate on their thesis, surface counterfactuals and second-order effects.
 
@@ -224,7 +359,7 @@ const TOOLS = [
       properties: {
         rationale: {
           type: "string",
-          description: "One to three sentences explaining the thesis behind this set of changes. Surface risk concerns or goals.",
+          description: "One to three sentences explaining the thesis behind this set of changes. Surface risk concerns or goals, including any tax reasoning.",
         },
         changes: {
           type: "array",
@@ -237,6 +372,11 @@ const TOOLS = [
               assetType: { type: "string", enum: ["stock", "etf", "mutual_fund"] },
               shares: { type: "number", description: "Number of shares (fractional supported)." },
               reason: { type: "string", description: "One-sentence reason for this specific change." },
+              lotMethod: {
+                type: "string",
+                enum: ["fifo", "average_cost"],
+                description: "Only used on sell/trim actions. Controls which lots get consumed: 'fifo' sells oldest shares first (default for stock/etf, typically triggers more long-term gains), 'average_cost' uses the weighted-average basis (default and legally required for mutual_fund). Specify this when the tax implications differ materially between methods.",
+              },
             },
             required: ["action", "symbol", "shares", "reason"],
           },
@@ -354,7 +494,7 @@ async function executeTool(
         if (userId) {
           const { data } = await supabaseAdmin
             .from("transactions")
-            .select("symbol, name, asset_type, transaction_type, shares, price_per_share, total_amount, occurred_at, notes, created_at")
+            .select("id, symbol, name, asset_type, transaction_type, shares, price_per_share, total_amount, occurred_at, notes, lot_method, created_at")
             .eq("user_id", userId)
           txns = data || []
         } else if (anonymousTransactions && anonymousTransactions.length > 0) {
@@ -394,6 +534,16 @@ async function executeTool(
           const unrealizedReturnPercent = totalCost > 0
             ? (unrealizedReturn / totalCost) * 100
             : null
+          // Unrealized ST/LT split: allocate unrealized gain to each lot based on
+          // its cost-basis share, then sum by term.
+          const sharesShort = Number(p.shares_short || 0)
+          const sharesLong = Number(p.shares_long || 0)
+          const costShort = Number(p.cost_basis_short || 0)
+          const costLong = Number(p.cost_basis_long || 0)
+          const valueShort = price != null ? sharesShort * price : costShort
+          const valueLong = price != null ? sharesLong * price : costLong
+          const unrealizedShort = valueShort - costShort
+          const unrealizedLong = valueLong - costLong
           return {
             symbol: p.symbol,
             name: p.name,
@@ -407,12 +557,26 @@ async function executeTool(
             marketValue: round2(marketValue),
             unrealizedReturn: round2(unrealizedReturn),
             unrealizedReturnPercent: unrealizedReturnPercent != null ? round2(unrealizedReturnPercent) : null,
+            unrealizedShortTerm: round2(unrealizedShort),
+            unrealizedLongTerm: round2(unrealizedLong),
+            sharesShort: round2(sharesShort),
+            sharesLong: round2(sharesLong),
             realizedReturn: p.realized_pnl != null ? round2(Number(p.realized_pnl)) : 0,
+            realizedShortTerm: p.realized_pnl_short != null ? round2(Number(p.realized_pnl_short)) : 0,
+            realizedLongTerm: p.realized_pnl_long != null ? round2(Number(p.realized_pnl_long)) : 0,
             totalDividends: p.total_dividends != null ? round2(Number(p.total_dividends)) : 0,
             dayChangePercent: q?.changePercent ?? null,
             purchaseDate: p.purchase_date,
             notes: p.notes ? String(p.notes).slice(0, 200) : null,
             hasLiveQuote: price != null,
+            lots: Array.isArray(p.lots) ? p.lots.map((l: any) => ({
+              buyDate: l.buy_date,
+              shares: round2(Number(l.shares)),
+              costBasisPerShare: round2(Number(l.cost_basis_per_share)),
+              totalCost: round2(Number(l.total_cost)),
+              daysHeld: l.days_held,
+              term: l.term,
+            })) : [],
           }
         })
 
@@ -478,6 +642,19 @@ async function executeTool(
         }))
         const top3Percent = topHoldings.slice(0, 3).reduce((s, h) => s + h.percent, 0)
 
+        // Portfolio-level ST/LT unrealized + realized aggregates -- lets the
+        // advisor reason about tax-efficient selling without walking the lots.
+        let unrealizedShortTerm = 0
+        let unrealizedLongTerm = 0
+        let realizedShortTerm = 0
+        let realizedLongTerm = 0
+        for (const p of enriched) {
+          unrealizedShortTerm += p.unrealizedShortTerm
+          unrealizedLongTerm += p.unrealizedLongTerm
+          realizedShortTerm += p.realizedShortTerm
+          realizedLongTerm += p.realizedLongTerm
+        }
+
         return JSON.stringify({
           totalPositions: enriched.length,
           aggregates: {
@@ -488,6 +665,10 @@ async function executeTool(
             dayChange: round2(dayChange),
             dayChangePercent: dayChangePercent != null ? round2(dayChangePercent) : null,
             unpricedCount,
+            unrealizedShortTerm: round2(unrealizedShortTerm),
+            unrealizedLongTerm: round2(unrealizedLongTerm),
+            realizedShortTerm: round2(realizedShortTerm),
+            realizedLongTerm: round2(realizedLongTerm),
           },
           positions: enriched,
           allocation: { byAssetClass, bySector },
@@ -506,13 +687,17 @@ async function executeTool(
         }
         const allowedActions = new Set(["buy", "sell", "trim", "add"])
         const normalized = rawChanges
-          .map((c: any) => ({
-            action: String(c.action || '').toLowerCase(),
-            symbol: String(c.symbol || '').toUpperCase(),
-            assetType: String(c.assetType || c.asset_type || 'stock'),
-            shares: Number(c.shares) || 0,
-            reason: String(c.reason || '').slice(0, 300),
-          }))
+          .map((c: any) => {
+            const lm = c.lotMethod ? String(c.lotMethod).toLowerCase() : null
+            return {
+              action: String(c.action || '').toLowerCase(),
+              symbol: String(c.symbol || '').toUpperCase(),
+              assetType: String(c.assetType || c.asset_type || 'stock'),
+              shares: Number(c.shares) || 0,
+              reason: String(c.reason || '').slice(0, 300),
+              lotMethod: lm === 'fifo' || lm === 'average_cost' ? lm : null,
+            }
+          })
           .filter((c: any) =>
             c.symbol && c.shares > 0 && allowedActions.has(c.action)
           )
@@ -629,7 +814,7 @@ async function buildPortfolioSnapshot(
   try {
     const { data: txns } = await supabaseAdmin
       .from("transactions")
-      .select("symbol, name, asset_type, transaction_type, shares, price_per_share, total_amount, occurred_at, notes, created_at")
+      .select("id, symbol, name, asset_type, transaction_type, shares, price_per_share, total_amount, occurred_at, notes, lot_method, created_at")
       .eq("user_id", userId)
     const computed = computePositionsFromTransactions(txns || [])
     if (computed.length > 0) {

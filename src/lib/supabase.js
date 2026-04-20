@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { computePositions, parsePositionId } from './positionEngine'
+import { computePositions, parsePositionId, defaultLotMethod } from './positionEngine'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -192,6 +192,7 @@ export const transactionsApi = {
     occurredAt,
     notes,
     source,
+    lotMethod,
   }) {
     const userId = await getUserId()
     const sharesNum = shares != null ? Number(shares) : null
@@ -213,6 +214,7 @@ export const transactionsApi = {
         occurred_at: occurredAt || new Date().toISOString().slice(0, 10),
         notes: notes || null,
         source: source || 'manual',
+        lot_method: transactionType === 'sell' ? (lotMethod || null) : null,
       })
       .select()
       .single()
@@ -283,7 +285,7 @@ export const portfolioApi = {
     })
   },
 
-  async sell({ symbol, assetType, shares, pricePerShare, occurredAt, notes }) {
+  async sell({ symbol, assetType, shares, pricePerShare, occurredAt, notes, lotMethod }) {
     return transactionsApi.add({
       symbol,
       assetType,
@@ -292,6 +294,7 @@ export const portfolioApi = {
       pricePerShare,
       occurredAt: occurredAt || null,
       notes,
+      lotMethod: lotMethod || defaultLotMethod(assetType),
     })
   },
 

@@ -400,6 +400,7 @@ function AdvisorAuthenticated() {
             assetType: c.assetType,
             shares: sellShares,
             pricePerShare: sellPrice,
+            lotMethod: c.lotMethod || undefined,
             notes: c.reason ? `Advisor: ${c.reason}` : null,
           })
         } else {
