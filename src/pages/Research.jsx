@@ -4,10 +4,11 @@ import {
   Search, TrendingUp, TrendingDown, RefreshCw, AlertTriangle,
   Sparkles, FileText, Table2, BarChart3, Plus, Trash2,
   ArrowRight, MessageSquare, X, Check, Activity, DollarSign,
-  Percent, Globe
+  Percent, Globe, PieChart,
 } from 'lucide-react'
 import { researchService, stocksService, marketService } from '../lib/api'
 import { benchApi } from '../lib/supabase'
+import AddPositionModal from '../components/portfolio/AddPositionModal'
 
 import { useAuth } from '../contexts/AuthContext'
 import { Link } from 'react-router-dom'
@@ -442,6 +443,7 @@ function ResearchBench() {
   const [addError, setAddError] = useState('')
   const [editingNotes, setEditingNotes] = useState(null)
   const [notesText, setNotesText] = useState('')
+  const [promotingItem, setPromotingItem] = useState(null)
 
   const { data: bench = [], isLoading } = useQuery({
     queryKey: ['research-bench'],
@@ -482,6 +484,20 @@ function ResearchBench() {
       queryClient.invalidateQueries({ queryKey: ['watchlist'] })
     },
   })
+
+  // Graduate a bench item to the portfolio: remove from bench after the
+  // position has been saved. Bench is for research candidates; owned
+  // positions belong on the Portfolio page.
+  async function handlePromoteSuccess() {
+    if (!promotingItem) return
+    try {
+      await benchApi.remove(promotingItem.id)
+      queryClient.invalidateQueries({ queryKey: ['research-bench'] })
+    } catch (_) {
+      // Position was saved; bench removal is best-effort. User can delete manually.
+    }
+    setPromotingItem(null)
+  }
 
   async function handleAdd() {
     if (!addSymbol.trim()) return
@@ -560,6 +576,16 @@ function ResearchBench() {
         </div>
       )}
 
+      <AddPositionModal
+        open={!!promotingItem}
+        onClose={() => setPromotingItem(null)}
+        onSuccess={handlePromoteSuccess}
+        presetSymbol={promotingItem?.symbol}
+        presetName={promotingItem?.name}
+        presetNotes={promotingItem?.notes}
+        title={promotingItem ? `Promote ${promotingItem.symbol} to Portfolio` : 'Add Position'}
+      />
+
       {!isLoading && bench.length > 0 && (
         <div className="space-y-3">
           {bench.map((item) => {
@@ -591,6 +617,7 @@ function ResearchBench() {
                     ))}
                   </div>
                   <div className="flex items-center gap-1">
+                    <button onClick={() => setPromotingItem(item)} className="btn-ghost p-1.5 text-gold hover:text-gold-bright" title="Promote to Portfolio"><PieChart className="w-4 h-4" /></button>
                     <button onClick={() => promoteMutation.mutate(item.id)} disabled={promoteMutation.isPending} className="btn-ghost p-1.5 text-positive hover:text-positive" title="Promote to Watchlist"><ArrowRight className="w-4 h-4" /></button>
                     <button onClick={() => { if (isEditingThis) { setEditingNotes(null) } else { setEditingNotes(item.id); setNotesText(item.notes || '') } }} className="btn-ghost p-1.5" title="Notes"><MessageSquare className="w-4 h-4" /></button>
                     <button onClick={() => removeMutation.mutate(item.id)} className="btn-ghost p-1.5 text-text-muted hover:text-crimson" title="Remove"><Trash2 className="w-4 h-4" /></button>
