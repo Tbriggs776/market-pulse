@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { mergeLot } from './portfolioMath'
+import { computePositions, parsePositionId } from './positionEngine'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -161,64 +161,58 @@ export const benchApi = {
   },
 }
 
-// ---- Portfolio Positions CRUD ----
-// add() upserts: when a position already exists for (user, symbol, asset_type)
-// shares are summed and cost basis is weighted-averaged (see portfolioMath).
+// ---- Transactions (source of truth for portfolio state) ----
+// Positions are derived via chronological replay -- see positionEngine.js.
 
-export const portfolioApi = {
-  async list() {
+export const transactionsApi = {
+  async list({ symbol, assetType, limit } = {}) {
     const userId = await getUserId()
-    const { data, error } = await supabase
-      .from('positions')
+    let q = supabase
+      .from('transactions')
       .select('*')
       .eq('user_id', userId)
+      .order('occurred_at', { ascending: false })
       .order('created_at', { ascending: false })
+    if (symbol) q = q.eq('symbol', symbol.toUpperCase())
+    if (assetType) q = q.eq('asset_type', assetType)
+    if (limit) q = q.limit(limit)
+    const { data, error } = await q
     if (error) throw error
     return data || []
   },
 
-  async add({ symbol, name, assetType, shares, costBasisPerShare, purchaseDate, notes }) {
+  async add({
+    symbol,
+    name,
+    assetType,
+    transactionType,
+    shares,
+    pricePerShare,
+    totalAmount,
+    occurredAt,
+    notes,
+    source,
+  }) {
     const userId = await getUserId()
-    const normalizedSymbol = symbol.toUpperCase()
-
-    const { data: existing, error: fetchErr } = await supabase
-      .from('positions')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('symbol', normalizedSymbol)
-      .eq('asset_type', assetType)
-      .maybeSingle()
-    if (fetchErr) throw fetchErr
-
-    if (existing) {
-      const merged = mergeLot(existing, { shares, costBasisPerShare })
-      const { data, error } = await supabase
-        .from('positions')
-        .update({
-          shares: merged.shares,
-          cost_basis_per_share: merged.cost_basis_per_share,
-          purchase_date: merged.purchase_date,
-          notes: notes ?? existing.notes,
-        })
-        .eq('id', existing.id)
-        .eq('user_id', userId)
-        .select()
-        .single()
-      if (error) throw error
-      return data
-    }
-
+    const sharesNum = shares != null ? Number(shares) : null
+    const priceNum = pricePerShare != null ? Number(pricePerShare) : null
+    const computedAmount = totalAmount != null
+      ? Number(totalAmount)
+      : (sharesNum != null && priceNum != null ? sharesNum * priceNum : null)
     const { data, error } = await supabase
-      .from('positions')
+      .from('transactions')
       .insert({
         user_id: userId,
-        symbol: normalizedSymbol,
-        name: name || '',
+        symbol: symbol.toUpperCase(),
+        name: name || null,
         asset_type: assetType,
-        shares,
-        cost_basis_per_share: costBasisPerShare,
-        purchase_date: purchaseDate || null,
+        transaction_type: transactionType,
+        shares: sharesNum,
+        price_per_share: priceNum,
+        total_amount: computedAmount != null ? Math.round(computedAmount * 100) / 100 : null,
+        occurred_at: occurredAt || new Date().toISOString().slice(0, 10),
         notes: notes || null,
+        source: source || 'manual',
       })
       .select()
       .single()
@@ -226,37 +220,18 @@ export const portfolioApi = {
     return data
   },
 
-  async updateShares(id, shares) {
+  async update(id, patch) {
     const userId = await getUserId()
+    const updates = {}
+    if (patch.shares !== undefined) updates.shares = patch.shares
+    if (patch.pricePerShare !== undefined) updates.price_per_share = patch.pricePerShare
+    if (patch.totalAmount !== undefined) updates.total_amount = patch.totalAmount
+    if (patch.occurredAt !== undefined) updates.occurred_at = patch.occurredAt
+    if (patch.notes !== undefined) updates.notes = patch.notes
+    if (patch.transactionType !== undefined) updates.transaction_type = patch.transactionType
     const { data, error } = await supabase
-      .from('positions')
-      .update({ shares })
-      .eq('id', id)
-      .eq('user_id', userId)
-      .select()
-      .single()
-    if (error) throw error
-    return data
-  },
-
-  async updateCostBasis(id, costBasisPerShare) {
-    const userId = await getUserId()
-    const { data, error } = await supabase
-      .from('positions')
-      .update({ cost_basis_per_share: costBasisPerShare })
-      .eq('id', id)
-      .eq('user_id', userId)
-      .select()
-      .single()
-    if (error) throw error
-    return data
-  },
-
-  async updateNotes(id, notes) {
-    const userId = await getUserId()
-    const { data, error } = await supabase
-      .from('positions')
-      .update({ notes })
+      .from('transactions')
+      .update(updates)
       .eq('id', id)
       .eq('user_id', userId)
       .select()
@@ -268,10 +243,68 @@ export const portfolioApi = {
   async remove(id) {
     const userId = await getUserId()
     const { error } = await supabase
-      .from('positions')
+      .from('transactions')
       .delete()
       .eq('id', id)
       .eq('user_id', userId)
+    if (error) throw error
+  },
+}
+
+// ---- Portfolio (derived from transactions) ----
+// list()    fetches all transactions and computes current positions.
+// add()     writes a BUY transaction (preserves the Pass 11 UX).
+// sell()    writes a SELL transaction -- advisor apply uses this so realized
+//           P&L is preserved in history.
+// remove()  erases transaction history for a (symbol, asset_type) -- matches
+//           the Portfolio trash button semantic ("I never owned this").
+
+export const portfolioApi = {
+  async list() {
+    const userId = await getUserId()
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', userId)
+    if (error) throw error
+    return computePositions(data || [])
+  },
+
+  async add({ symbol, name, assetType, shares, costBasisPerShare, purchaseDate, notes }) {
+    return transactionsApi.add({
+      symbol,
+      name,
+      assetType,
+      transactionType: 'buy',
+      shares,
+      pricePerShare: costBasisPerShare,
+      occurredAt: purchaseDate || null,
+      notes,
+    })
+  },
+
+  async sell({ symbol, assetType, shares, pricePerShare, occurredAt, notes }) {
+    return transactionsApi.add({
+      symbol,
+      assetType,
+      transactionType: 'sell',
+      shares,
+      pricePerShare,
+      occurredAt: occurredAt || null,
+      notes,
+    })
+  },
+
+  async remove(positionId) {
+    const parsed = parsePositionId(positionId)
+    if (!parsed) throw new Error(`Invalid position id: ${positionId}`)
+    const userId = await getUserId()
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('user_id', userId)
+      .eq('symbol', parsed.symbol)
+      .eq('asset_type', parsed.assetType)
     if (error) throw error
   },
 }

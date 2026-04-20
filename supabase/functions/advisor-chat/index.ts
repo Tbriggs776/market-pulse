@@ -19,6 +19,125 @@ const MAX_LOOPS = 6
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 
+// Position engine: mirrors src/lib/positionEngine.js. Keep in sync when
+// adding new transaction types.
+const CLOSED_EPSILON = 1e-8
+
+interface Txn {
+  symbol: string
+  name?: string | null
+  asset_type: string
+  transaction_type: string
+  shares?: number | string | null
+  price_per_share?: number | string | null
+  total_amount?: number | string | null
+  occurred_at: string
+  notes?: string | null
+  created_at?: string | null
+}
+
+interface DerivedPosition {
+  id: string
+  symbol: string
+  asset_type: string
+  name: string
+  shares: number
+  cost_basis_per_share: number
+  purchase_date: string | null
+  notes: string | null
+  realized_pnl: number
+  total_dividends: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+function computePositionsFromTransactions(transactions: Txn[]): DerivedPosition[] {
+  if (!transactions || transactions.length === 0) return []
+  const groups = new Map<string, Txn[]>()
+  for (const t of transactions) {
+    const key = `${t.symbol}:${t.asset_type}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(t)
+  }
+
+  const positions: DerivedPosition[] = []
+  for (const [key, txns] of groups) {
+    txns.sort((a, b) => {
+      const da = new Date(a.occurred_at).getTime()
+      const db = new Date(b.occurred_at).getTime()
+      if (da !== db) return da - db
+      const ca = new Date(a.created_at || a.occurred_at).getTime()
+      const cb = new Date(b.created_at || b.occurred_at).getTime()
+      return ca - cb
+    })
+
+    let shares = 0
+    let avgCost = 0
+    let realizedPnl = 0
+    let totalDividends = 0
+    let firstBuyDate: string | null = null
+    let latestTouch: number | null = null
+    let name: string | null = null
+    let latestNotes: string | null = null
+
+    for (const t of txns) {
+      if (!name && t.name) name = t.name
+      if (t.notes) latestNotes = t.notes
+      const ts = new Date(t.created_at || t.occurred_at).getTime()
+      if (latestTouch == null || ts > latestTouch) latestTouch = ts
+
+      if (t.transaction_type === 'buy') {
+        const buyShares = Number(t.shares) || 0
+        const buyPrice = Number(t.price_per_share) || 0
+        if (buyShares <= 0) continue
+        const newShares = shares + buyShares
+        const baseCost = shares > CLOSED_EPSILON ? shares * avgCost : 0
+        avgCost = newShares > 0 ? (baseCost + buyShares * buyPrice) / newShares : 0
+        shares = newShares
+        if (!firstBuyDate) firstBuyDate = t.occurred_at
+      } else if (t.transaction_type === 'sell') {
+        const sellShares = Number(t.shares) || 0
+        const sellPrice = Number(t.price_per_share) || 0
+        if (sellShares <= 0) continue
+        const actualSold = Math.min(sellShares, shares)
+        realizedPnl += (sellPrice - avgCost) * actualSold
+        shares -= actualSold
+        if (shares <= CLOSED_EPSILON) {
+          shares = 0
+          avgCost = 0
+        }
+      } else if (t.transaction_type === 'dividend') {
+        totalDividends += Number(t.total_amount) || 0
+      }
+    }
+
+    if (shares > CLOSED_EPSILON) {
+      const [symbol, assetType] = key.split(':')
+      positions.push({
+        id: key,
+        symbol,
+        asset_type: assetType,
+        name: name || '',
+        shares,
+        cost_basis_per_share: avgCost,
+        purchase_date: firstBuyDate,
+        notes: latestNotes,
+        realized_pnl: realizedPnl,
+        total_dividends: totalDividends,
+        created_at: firstBuyDate,
+        updated_at: latestTouch ? new Date(latestTouch).toISOString() : null,
+      })
+    }
+  }
+
+  positions.sort((a, b) => {
+    const ua = a.updated_at ? new Date(a.updated_at).getTime() : 0
+    const ub = b.updated_at ? new Date(b.updated_at).getTime() : 0
+    return ub - ua
+  })
+  return positions
+}
+
 const SYSTEM_PROMPT_BASE = `You are the Market Pulse Advisor, a portfolio-aware financial research assistant built for a fractional CFO and investor. You operate with two modes and pick the right one based on the question:
 
 PORTFOLIO CFO MODE (default when user asks about their positions, allocation, sizing, exposure, or "should I"): concise, data-forward, institutional tone. Cite specific tickers from the user's portfolio and watchlist by name. Reference current macro data when relevant. Give concrete recommendations with reasoning, not hedged advice. You can be direct about concerns. When the user asks about their holdings, allocation, sector exposure, or concentration, call get_portfolio to pull live values, gain/loss, and sector breakdown -- don't make quantitative claims off the light snapshot alone.
@@ -145,7 +264,7 @@ async function executeTool(
   supabaseAdmin: any,
   userId: string | null,
   anonymousWatchlist: any[] | null,
-  anonymousPositions: any[] | null,
+  anonymousTransactions: any[] | null,
 ): Promise<string> {
   try {
     switch (toolName) {
@@ -230,26 +349,19 @@ async function executeTool(
         return JSON.stringify({ watchlist: enriched })
       }
       case "get_portfolio": {
-        // Collect raw positions from DB (authed) or session context (anon)
-        let rawPositions: any[] = []
+        // Compute current positions from transaction history (authed DB or anon session).
+        let txns: Txn[] = []
         if (userId) {
-          const { data: positions } = await supabaseAdmin
-            .from("positions")
-            .select("symbol, name, asset_type, shares, cost_basis_per_share, purchase_date, notes")
+          const { data } = await supabaseAdmin
+            .from("transactions")
+            .select("symbol, name, asset_type, transaction_type, shares, price_per_share, total_amount, occurred_at, notes, created_at")
             .eq("user_id", userId)
-            .order("created_at", { ascending: false })
-          rawPositions = positions || []
-        } else if (anonymousPositions && anonymousPositions.length > 0) {
-          rawPositions = anonymousPositions.map((p: any) => ({
-            symbol: p.symbol,
-            name: p.name,
-            asset_type: p.asset_type,
-            shares: p.shares,
-            cost_basis_per_share: p.cost_basis_per_share,
-            purchase_date: p.purchase_date,
-            notes: p.notes,
-          }))
+          txns = data || []
+        } else if (anonymousTransactions && anonymousTransactions.length > 0) {
+          txns = anonymousTransactions
         }
+
+        const rawPositions = computePositionsFromTransactions(txns)
 
         if (rawPositions.length === 0) {
           return JSON.stringify({
@@ -295,6 +407,8 @@ async function executeTool(
             marketValue: round2(marketValue),
             unrealizedReturn: round2(unrealizedReturn),
             unrealizedReturnPercent: unrealizedReturnPercent != null ? round2(unrealizedReturnPercent) : null,
+            realizedReturn: p.realized_pnl != null ? round2(Number(p.realized_pnl)) : 0,
+            totalDividends: p.total_dividends != null ? round2(Number(p.total_dividends)) : 0,
             dayChangePercent: q?.changePercent ?? null,
             purchaseDate: p.purchase_date,
             notes: p.notes ? String(p.notes).slice(0, 200) : null,
@@ -434,7 +548,7 @@ async function buildPortfolioSnapshot(
   supabaseAdmin: any,
   userId: string | null,
   anonymousWatchlist: any[] | null,
-  anonymousPositions: any[] | null,
+  anonymousTransactions: any[] | null,
 ): Promise<string> {
   const parts: string[] = []
   const today = new Date().toISOString().slice(0, 10)
@@ -455,14 +569,17 @@ async function buildPortfolioSnapshot(
     } else {
       parts.push("SESSION WATCHLIST: empty (user has not added any tickers yet)")
     }
-    if (anonymousPositions && anonymousPositions.length > 0) {
+    const anonPositions = anonymousTransactions && anonymousTransactions.length > 0
+      ? computePositionsFromTransactions(anonymousTransactions)
+      : []
+    if (anonPositions.length > 0) {
       let totalCost = 0
-      for (const p of anonymousPositions) {
+      for (const p of anonPositions) {
         totalCost += Number(p.shares) * Number(p.cost_basis_per_share)
       }
       parts.push("")
-      parts.push(`SESSION PORTFOLIO (${anonymousPositions.length} positions, $${totalCost.toFixed(0)} cost basis, not saved -- call get_portfolio for live values):`)
-      for (const p of anonymousPositions) {
+      parts.push(`SESSION PORTFOLIO (${anonPositions.length} positions, $${totalCost.toFixed(0)} cost basis, not saved -- call get_portfolio for live values):`)
+      for (const p of anonPositions) {
         const typeLabel = p.asset_type === 'mutual_fund' ? 'mutual fund' : p.asset_type
         parts.push(`- ${p.symbol}${p.name ? ` (${p.name})` : ""}: ${Number(p.shares)} shares @ $${Number(p.cost_basis_per_share).toFixed(2)} (${typeLabel})`)
       }
@@ -510,20 +627,19 @@ async function buildPortfolioSnapshot(
   } catch (_) { /* silent */ }
 
   try {
-    const { data: positions } = await supabaseAdmin
-      .from("positions")
-      .select("symbol, name, asset_type, shares, cost_basis_per_share")
+    const { data: txns } = await supabaseAdmin
+      .from("transactions")
+      .select("symbol, name, asset_type, transaction_type, shares, price_per_share, total_amount, occurred_at, notes, created_at")
       .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(30)
-    if (positions && positions.length > 0) {
+    const computed = computePositionsFromTransactions(txns || [])
+    if (computed.length > 0) {
       let totalCost = 0
-      for (const p of positions) {
+      for (const p of computed) {
         totalCost += Number(p.shares) * Number(p.cost_basis_per_share)
       }
       parts.push("")
-      parts.push(`USER PORTFOLIO (${positions.length} positions, $${totalCost.toFixed(0)} cost basis -- call get_portfolio for live values, gain/loss, sector breakdown):`)
-      for (const p of positions) {
+      parts.push(`USER PORTFOLIO (${computed.length} positions, $${totalCost.toFixed(0)} cost basis -- call get_portfolio for live values, gain/loss, sector breakdown):`)
+      for (const p of computed.slice(0, 30)) {
         const typeLabel = p.asset_type === 'mutual_fund' ? 'mutual fund' : p.asset_type
         parts.push(`- ${p.symbol}${p.name ? ` (${p.name})` : ""}: ${Number(p.shares)} shares @ $${Number(p.cost_basis_per_share).toFixed(2)} (${typeLabel})`)
       }
@@ -564,7 +680,7 @@ serve(async (req) => {
       conversationId?: string
       userMessage: string
       modelKey?: "sonnet" | "opus" | "haiku"
-      anonymousContext?: { watchlist?: any[]; positions?: any[] }
+      anonymousContext?: { watchlist?: any[]; transactions?: any[] }
       priorMessages?: Array<{ role: string; content: string }>
     }
 
@@ -574,7 +690,7 @@ serve(async (req) => {
 
     const modelId = MODEL_IDS[modelKey] || MODEL_IDS.sonnet
     const anonymousWatchlist = anonymousContext?.watchlist || null
-    const anonymousPositions = anonymousContext?.positions || null
+    const anonymousTransactions = anonymousContext?.transactions || null
 
     // Conversation handling: authenticated writes to DB, anonymous works in memory
     let conversationId = incomingConvId
@@ -612,7 +728,7 @@ serve(async (req) => {
       claudeMessages.push({ role: "user", content: userMessage })
     }
 
-    const snapshot = await buildPortfolioSnapshot(supabaseAdmin, userId, anonymousWatchlist, anonymousPositions)
+    const snapshot = await buildPortfolioSnapshot(supabaseAdmin, userId, anonymousWatchlist, anonymousTransactions)
     const systemPrompt = `${SYSTEM_PROMPT_BASE}\n\n=== PORTFOLIO CONTEXT ===\n${snapshot}\n=== END CONTEXT ===`
 
     const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY")
@@ -736,7 +852,7 @@ serve(async (req) => {
                 continue
               }
               emit("tool_call", { id: tu.id, name: tu.name, input: tu.input, status: "running" })
-              const resultStr = await executeTool(tu.name, tu.input, supabaseAdmin, userId, anonymousWatchlist, anonymousPositions)
+              const resultStr = await executeTool(tu.name, tu.input, supabaseAdmin, userId, anonymousWatchlist, anonymousTransactions)
               let resultParsed: any = null
               try { resultParsed = JSON.parse(resultStr) } catch { resultParsed = { raw: resultStr } }
               const isErr = resultParsed?.error != null

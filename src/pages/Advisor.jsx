@@ -55,7 +55,7 @@ export default function Advisor() {
 // ANONYMOUS MODE: React state only, no DB, no sidebar
 // ============================================================
 function AdvisorAnonymous() {
-  const { watchlist, positions } = useAnonymousStore()
+  const { watchlist, positions, transactions } = useAnonymousStore()
   const [messages, setMessages] = useState([]) // { role, content }
   const [modelKey, setModelKey] = useState('sonnet')
   const [input, setInput] = useState('')
@@ -90,14 +90,16 @@ function AdvisorAnonymous() {
       name: w.name,
       added_price: w.added_price,
     }))
-    const anonymousPositions = positions.map((p) => ({
-      symbol: p.symbol,
-      name: p.name,
-      asset_type: p.asset_type,
-      shares: p.shares,
-      cost_basis_per_share: p.cost_basis_per_share,
-      purchase_date: p.purchase_date,
-      notes: p.notes,
+    const anonymousTransactions = transactions.map((t) => ({
+      symbol: t.symbol,
+      name: t.name,
+      asset_type: t.asset_type,
+      transaction_type: t.transaction_type,
+      shares: t.shares,
+      price_per_share: t.price_per_share,
+      total_amount: t.total_amount,
+      occurred_at: t.occurred_at,
+      notes: t.notes,
     }))
 
     let fullAssistantText = ''
@@ -108,7 +110,7 @@ function AdvisorAnonymous() {
         modelKey,
         anonymous: true,
         anonymousWatchlist,
-        anonymousPositions,
+        anonymousTransactions,
         priorMessages,
         onDelta: (chunk) => {
           fullAssistantText += chunk
@@ -139,7 +141,7 @@ function AdvisorAnonymous() {
     } finally {
       setStreaming(false)
     }
-  }, [input, streaming, modelKey, messages, watchlist, positions])
+  }, [input, streaming, modelKey, messages, watchlist, transactions])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -380,15 +382,26 @@ function AdvisorAuthenticated() {
           failures.push(`${c.symbol}: no existing position`)
           continue
         }
-        if (c.action === 'sell') {
-          await portfolioApi.remove(existing.id)
-        } else if (c.action === 'trim') {
-          const newShares = Number(existing.shares) - Number(c.shares)
-          if (newShares <= 0) {
-            await portfolioApi.remove(existing.id)
-          } else {
-            await portfolioApi.updateShares(existing.id, newShares)
-          }
+        if (c.action === 'sell' || c.action === 'trim') {
+          // Sell price: use live quote when available so realized P&L is
+          // meaningful. Fall back to cost basis (zero realized gain) so the
+          // transaction still records without lying about the number.
+          const q = quotes[c.symbol]
+          const sellPrice = q?.price != null
+            ? Number(q.price)
+            : Number(existing.cost_basis_per_share)
+          const holdShares = Number(existing.shares)
+          const requested = Number(c.shares)
+          const sellShares = c.action === 'sell'
+            ? holdShares
+            : Math.min(requested, holdShares)
+          await portfolioApi.sell({
+            symbol: c.symbol,
+            assetType: c.assetType,
+            shares: sellShares,
+            pricePerShare: sellPrice,
+            notes: c.reason ? `Advisor: ${c.reason}` : null,
+          })
         } else {
           failures.push(`${c.symbol}: ${c.action} requires cost basis -- use Portfolio page`)
         }
