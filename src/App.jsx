@@ -4,6 +4,7 @@ import { AnonymousStoreProvider } from './contexts/AnonymousStoreContext'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Watchlist from './pages/Watchlist'
+import Portfolio from './pages/Portfolio'
 import Research from './pages/Research'
 import Government from './pages/Government'
 import Advisor from './pages/Advisor'
@@ -53,6 +54,7 @@ function AppRoutes() {
         }
       >
         <Route path="/watchlist" element={<Watchlist />} />
+        <Route path="/portfolio" element={<Portfolio />} />
       </Route>
     </Routes>
   )

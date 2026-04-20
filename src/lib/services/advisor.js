@@ -63,6 +63,7 @@ async function sendMessage({
   modelKey = 'sonnet',
   anonymous = false,
   anonymousWatchlist = [],
+  anonymousPositions = [],
   priorMessages = [],
   onDelta, onMeta, onToolCall, onToolResult, onError, onDone,
 }) {
@@ -79,7 +80,10 @@ async function sendMessage({
 
   const body = { userMessage, modelKey }
   if (anonymous) {
-    body.anonymousContext = { watchlist: anonymousWatchlist }
+    body.anonymousContext = {
+      watchlist: anonymousWatchlist,
+      positions: anonymousPositions,
+    }
     body.priorMessages = priorMessages
   } else {
     body.conversationId = conversationId

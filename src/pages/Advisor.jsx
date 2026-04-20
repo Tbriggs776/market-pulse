@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import { Link } from 'react-router-dom'
@@ -7,9 +7,11 @@ import {
   MessageSquare, Loader2, AlertTriangle, Wrench,
   ChevronDown, ChevronRight, Check, X, LogIn, Info,
 } from 'lucide-react'
-import { advisorService } from '../lib/api'
+import { advisorService, stocksService } from '../lib/api'
+import { portfolioApi } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { useAnonymousStore } from '../contexts/AnonymousStoreContext'
+import TradeProposalCard from '../components/portfolio/TradeProposalCard'
 
 const MODELS = [
   { key: 'sonnet', label: 'Sonnet', icon: Brain, desc: 'Fast, capable (default)' },
@@ -33,6 +35,7 @@ const TOOL_LABELS = {
   get_treasury_snapshot: 'Treasury snapshot',
   search_news: 'News search',
   get_user_watchlist: 'Watchlist refresh',
+  get_portfolio: 'Portfolio snapshot',
 }
 
 function toolInputSummary(name, input) {
@@ -52,13 +55,14 @@ export default function Advisor() {
 // ANONYMOUS MODE: React state only, no DB, no sidebar
 // ============================================================
 function AdvisorAnonymous() {
-  const { watchlist } = useAnonymousStore()
+  const { watchlist, positions } = useAnonymousStore()
   const [messages, setMessages] = useState([]) // { role, content }
   const [modelKey, setModelKey] = useState('sonnet')
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamBuffer, setStreamBuffer] = useState('')
   const [streamToolEvents, setStreamToolEvents] = useState([])
+  const [proposals, setProposals] = useState([]) // { id, rationale, changes }
   const [error, setError] = useState(null)
   const scrollRef = useRef(null)
   const inputRef = useRef(null)
@@ -86,6 +90,15 @@ function AdvisorAnonymous() {
       name: w.name,
       added_price: w.added_price,
     }))
+    const anonymousPositions = positions.map((p) => ({
+      symbol: p.symbol,
+      name: p.name,
+      asset_type: p.asset_type,
+      shares: p.shares,
+      cost_basis_per_share: p.cost_basis_per_share,
+      purchase_date: p.purchase_date,
+      notes: p.notes,
+    }))
 
     let fullAssistantText = ''
 
@@ -95,13 +108,23 @@ function AdvisorAnonymous() {
         modelKey,
         anonymous: true,
         anonymousWatchlist,
+        anonymousPositions,
         priorMessages,
         onDelta: (chunk) => {
           fullAssistantText += chunk
           setStreamBuffer((prev) => prev + chunk)
         },
-        onToolCall: (evt) => setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'call' }]),
-        onToolResult: (evt) => setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'result' }]),
+        onToolCall: (evt) => {
+          if (evt.name === 'propose_trade') {
+            setProposals((prev) => [...prev, { id: evt.id, ...evt.input }])
+            return
+          }
+          setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'call' }])
+        },
+        onToolResult: (evt) => {
+          if (evt.name === 'propose_trade') return
+          setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'result' }])
+        },
         onError: (msg) => setError(msg),
       })
       if (fullAssistantText) {
@@ -116,7 +139,7 @@ function AdvisorAnonymous() {
     } finally {
       setStreaming(false)
     }
-  }, [input, streaming, modelKey, messages, watchlist])
+  }, [input, streaming, modelKey, messages, watchlist, positions])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -230,6 +253,17 @@ function AdvisorAnonymous() {
             </div>
           )}
 
+          {proposals.map((p) => (
+            <TradeProposalCard
+              key={p.id}
+              proposal={p}
+              positions={positions}
+              quotes={{}}
+              canApply={false}
+              onDismiss={() => setProposals((prev) => prev.filter((x) => x.id !== p.id))}
+            />
+          ))}
+
           {error && (
             <div className="card border-crimson/30 bg-crimson/5">
               <div className="flex items-center gap-2 text-crimson text-sm">
@@ -262,7 +296,12 @@ function AdvisorAnonymous() {
           </div>
           <div className="flex items-center justify-between mt-2 text-[10px] text-text-muted">
             <span>{modelKey === 'opus' ? 'Opus 4.7 -- deeper reasoning' : 'Sonnet 4.6 -- fast default'}</span>
-            <span>{watchlist.length > 0 ? `${watchlist.length} tickers in session watchlist` : 'No portfolio context'}</span>
+            <span>
+              {positions.length > 0 && `${positions.length} ${positions.length === 1 ? 'position' : 'positions'} · `}
+              {watchlist.length > 0
+                ? `${watchlist.length} ${watchlist.length === 1 ? 'ticker' : 'tickers'} watched`
+                : positions.length === 0 ? 'No portfolio context' : ''}
+            </span>
           </div>
         </div>
       </section>
@@ -281,6 +320,8 @@ function AdvisorAuthenticated() {
   const [streaming, setStreaming] = useState(false)
   const [streamBuffer, setStreamBuffer] = useState('')
   const [streamToolEvents, setStreamToolEvents] = useState([])
+  const [proposals, setProposals] = useState([]) // { id, rationale, changes }
+  const [applyState, setApplyState] = useState({}) // { [proposalId]: { applying, error } }
   const [error, setError] = useState(null)
   const scrollRef = useRef(null)
   const inputRef = useRef(null)
@@ -298,8 +339,81 @@ function AdvisorAuthenticated() {
     staleTime: 0,
   })
 
+  // Portfolio + quotes for inline what-if simulation on proposal cards.
+  const portfolioQ = useQuery({
+    queryKey: ['portfolio'],
+    queryFn: portfolioApi.list,
+    staleTime: 5 * 60 * 1000,
+  })
+  const positions = portfolioQ.data || []
+  const positionSymbols = useMemo(
+    () => [...new Set(positions.map((p) => p.symbol))],
+    [positions]
+  )
+  const quotesQ = useQuery({
+    queryKey: ['quotes', positionSymbols.join(',')],
+    queryFn: () => stocksService.getQuotes(positionSymbols),
+    enabled: positionSymbols.length > 0,
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  })
+  const quotes = quotesQ.data || {}
+
   const conversations = convsQ.data || []
   const messages = activeConvQ.data?.messages || []
+
+  // Reset proposals when switching conversations.
+  useEffect(() => {
+    setProposals([])
+    setApplyState({})
+  }, [activeId])
+
+  async function handleApplyProposal(proposalId, changes) {
+    setApplyState((prev) => ({ ...prev, [proposalId]: { applying: true, error: null } }))
+    const failures = []
+    try {
+      for (const c of changes) {
+        const existing = positions.find(
+          (p) => p.symbol === c.symbol && p.asset_type === c.assetType
+        )
+        if (!existing) {
+          failures.push(`${c.symbol}: no existing position`)
+          continue
+        }
+        if (c.action === 'sell') {
+          await portfolioApi.remove(existing.id)
+        } else if (c.action === 'trim') {
+          const newShares = Number(existing.shares) - Number(c.shares)
+          if (newShares <= 0) {
+            await portfolioApi.remove(existing.id)
+          } else {
+            await portfolioApi.updateShares(existing.id, newShares)
+          }
+        } else {
+          failures.push(`${c.symbol}: ${c.action} requires cost basis -- use Portfolio page`)
+        }
+      }
+      if (failures.length === 0) {
+        setProposals((prev) => prev.filter((p) => p.id !== proposalId))
+        setApplyState((prev) => {
+          const next = { ...prev }
+          delete next[proposalId]
+          return next
+        })
+        queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+      } else {
+        setApplyState((prev) => ({
+          ...prev,
+          [proposalId]: { applying: false, error: failures.join('; ') },
+        }))
+      }
+    } catch (err) {
+      setApplyState((prev) => ({
+        ...prev,
+        [proposalId]: { applying: false, error: err.message || 'Apply failed' },
+      }))
+    }
+  }
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -360,8 +474,17 @@ function AdvisorAuthenticated() {
           }
         },
         onDelta: (chunk) => setStreamBuffer((prev) => prev + chunk),
-        onToolCall: (evt) => setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'call' }]),
-        onToolResult: (evt) => setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'result' }]),
+        onToolCall: (evt) => {
+          if (evt.name === 'propose_trade') {
+            setProposals((prev) => [...prev, { id: evt.id, ...evt.input }])
+            return
+          }
+          setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'call' }])
+        },
+        onToolResult: (evt) => {
+          if (evt.name === 'propose_trade') return
+          setStreamToolEvents((prev) => [...prev, { ...evt, kind: 'result' }])
+        },
         onError: (msg) => setError(msg),
       })
       queryClient.invalidateQueries({ queryKey: ['advisor-conversations'] })
@@ -510,6 +633,23 @@ function AdvisorAuthenticated() {
             </div>
           )}
 
+          {proposals.map((p) => {
+            const state = applyState[p.id] || {}
+            return (
+              <TradeProposalCard
+                key={p.id}
+                proposal={p}
+                positions={positions}
+                quotes={quotes}
+                canApply={true}
+                isApplying={state.applying}
+                applyError={state.error}
+                onApply={(changes) => handleApplyProposal(p.id, changes)}
+                onDismiss={() => setProposals((prev) => prev.filter((x) => x.id !== p.id))}
+              />
+            )
+          })}
+
           {error && (
             <div className="card border-crimson/30 bg-crimson/5">
               <div className="flex items-center gap-2 text-crimson text-sm">
@@ -542,7 +682,11 @@ function AdvisorAuthenticated() {
           </div>
           <div className="flex items-center justify-between mt-2 text-[10px] text-text-muted">
             <span>{modelKey === 'opus' ? 'Opus 4.7 -- deeper reasoning' : 'Sonnet 4.6 -- fast default'}</span>
-            <span>Enter to send -- Shift+Enter for newline</span>
+            <span>
+              {positions.length > 0
+                ? `${positions.length} ${positions.length === 1 ? 'position' : 'positions'} aware`
+                : 'Enter to send -- Shift+Enter for newline'}
+            </span>
           </div>
         </div>
       </section>

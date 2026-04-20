@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { mergeLot } from './portfolioMath'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -157,5 +158,120 @@ export const benchApi = {
       .delete()
       .eq('id', id)
       .eq('user_id', userId)
+  },
+}
+
+// ---- Portfolio Positions CRUD ----
+// add() upserts: when a position already exists for (user, symbol, asset_type)
+// shares are summed and cost basis is weighted-averaged (see portfolioMath).
+
+export const portfolioApi = {
+  async list() {
+    const userId = await getUserId()
+    const { data, error } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
+  async add({ symbol, name, assetType, shares, costBasisPerShare, purchaseDate, notes }) {
+    const userId = await getUserId()
+    const normalizedSymbol = symbol.toUpperCase()
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('symbol', normalizedSymbol)
+      .eq('asset_type', assetType)
+      .maybeSingle()
+    if (fetchErr) throw fetchErr
+
+    if (existing) {
+      const merged = mergeLot(existing, { shares, costBasisPerShare })
+      const { data, error } = await supabase
+        .from('positions')
+        .update({
+          shares: merged.shares,
+          cost_basis_per_share: merged.cost_basis_per_share,
+          purchase_date: merged.purchase_date,
+          notes: notes ?? existing.notes,
+        })
+        .eq('id', existing.id)
+        .eq('user_id', userId)
+        .select()
+        .single()
+      if (error) throw error
+      return data
+    }
+
+    const { data, error } = await supabase
+      .from('positions')
+      .insert({
+        user_id: userId,
+        symbol: normalizedSymbol,
+        name: name || '',
+        asset_type: assetType,
+        shares,
+        cost_basis_per_share: costBasisPerShare,
+        purchase_date: purchaseDate || null,
+        notes: notes || null,
+      })
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  async updateShares(id, shares) {
+    const userId = await getUserId()
+    const { data, error } = await supabase
+      .from('positions')
+      .update({ shares })
+      .eq('id', id)
+      .eq('user_id', userId)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  async updateCostBasis(id, costBasisPerShare) {
+    const userId = await getUserId()
+    const { data, error } = await supabase
+      .from('positions')
+      .update({ cost_basis_per_share: costBasisPerShare })
+      .eq('id', id)
+      .eq('user_id', userId)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  async updateNotes(id, notes) {
+    const userId = await getUserId()
+    const { data, error } = await supabase
+      .from('positions')
+      .update({ notes })
+      .eq('id', id)
+      .eq('user_id', userId)
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  async remove(id) {
+    const userId = await getUserId()
+    const { error } = await supabase
+      .from('positions')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId)
+    if (error) throw error
   },
 }

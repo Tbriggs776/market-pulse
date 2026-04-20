@@ -21,7 +21,7 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 
 const SYSTEM_PROMPT_BASE = `You are the Market Pulse Advisor, a portfolio-aware financial research assistant built for a fractional CFO and investor. You operate with two modes and pick the right one based on the question:
 
-PORTFOLIO CFO MODE (default when user asks about their positions, allocation, sizing, exposure, or "should I"): concise, data-forward, institutional tone. Cite specific tickers from the user's watchlist by name. Reference current macro data when relevant. Give concrete recommendations with reasoning, not hedged advice. You can be direct about concerns.
+PORTFOLIO CFO MODE (default when user asks about their positions, allocation, sizing, exposure, or "should I"): concise, data-forward, institutional tone. Cite specific tickers from the user's portfolio and watchlist by name. Reference current macro data when relevant. Give concrete recommendations with reasoning, not hedged advice. You can be direct about concerns. When the user asks about their holdings, allocation, sector exposure, or concentration, call get_portfolio to pull live values, gain/loss, and sector breakdown -- don't make quantitative claims off the light snapshot alone.
 
 RESEARCH COPILOT MODE (when user is exploring a thesis, asking "what do you think about X," or working through an analysis): Socratic, exploratory, suggest angles they haven't considered, play devil's advocate on their thesis, surface counterfactuals and second-order effects.
 
@@ -29,7 +29,7 @@ Tool usage guidance:
 - You have tools for live market data. Use them when the answer depends on current numbers.
 - Don't call tools for static analysis that doesn't need fresh data. Don't call a tool just to confirm what you already know.
 - If the user asks about a ticker, reach for get_quote or research_ticker rather than reciting from memory.
-- The portfolio snapshot in this system prompt is current as of the conversation start. If the user mentions they just added a ticker, use get_user_watchlist to refresh.
+- The portfolio and watchlist snapshots in this system prompt are current as of conversation start. For live values, gain/loss, sector breakdown, or concentration analysis, call get_portfolio. For watchlist refresh, call get_user_watchlist.
 
 Formatting:
 - Use markdown. Bold tickers with **SYMBOL**. Use bullets for lists of 3+ items. Use tables sparingly for comparisons.
@@ -92,6 +92,40 @@ const TOOLS = [
     description: "Get the user's current watchlist with live prices. Use this to refresh the portfolio view mid-conversation.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
+  {
+    name: "get_portfolio",
+    description: "Get the user's actual portfolio: positions with live prices, unrealized gain/loss, asset class and sector allocation, and top-holdings concentration. Use whenever the user asks about their holdings, total value, allocation, exposure, concentration, or what to do with their portfolio. This is distinct from get_user_watchlist -- portfolio means owned positions with cost basis and share count, watchlist means tickers they're just tracking.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "propose_trade",
+    description: "Propose a concrete set of portfolio changes for the user to simulate and apply. Use this only when you're making a specific, actionable recommendation after analyzing their portfolio -- e.g. 'trim NVDA, add VXUS for international diversification'. Call get_portfolio first so you know what they actually hold. The user will see an inline proposal card with a Simulate button to preview asset-class and concentration changes, and an Apply button for trim/sell actions. Do NOT use this for general ideas, musings, or exploratory suggestions -- only for concrete trades with specific share counts.",
+    input_schema: {
+      type: "object",
+      properties: {
+        rationale: {
+          type: "string",
+          description: "One to three sentences explaining the thesis behind this set of changes. Surface risk concerns or goals.",
+        },
+        changes: {
+          type: "array",
+          description: "1-10 proposed trades. Use 'trim' for reducing an existing position, 'add' for adding to an existing position, 'sell' for fully exiting, 'buy' for a new position.",
+          items: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["buy", "sell", "trim", "add"] },
+              symbol: { type: "string" },
+              assetType: { type: "string", enum: ["stock", "etf", "mutual_fund"] },
+              shares: { type: "number", description: "Number of shares (fractional supported)." },
+              reason: { type: "string", description: "One-sentence reason for this specific change." },
+            },
+            required: ["action", "symbol", "shares", "reason"],
+          },
+        },
+      },
+      required: ["rationale", "changes"],
+    },
+  },
 ]
 
 async function callInternalFunction(fnName: string, body: any): Promise<any> {
@@ -111,6 +145,7 @@ async function executeTool(
   supabaseAdmin: any,
   userId: string | null,
   anonymousWatchlist: any[] | null,
+  anonymousPositions: any[] | null,
 ): Promise<string> {
   try {
     switch (toolName) {
@@ -194,6 +229,191 @@ async function executeTool(
         })
         return JSON.stringify({ watchlist: enriched })
       }
+      case "get_portfolio": {
+        // Collect raw positions from DB (authed) or session context (anon)
+        let rawPositions: any[] = []
+        if (userId) {
+          const { data: positions } = await supabaseAdmin
+            .from("positions")
+            .select("symbol, name, asset_type, shares, cost_basis_per_share, purchase_date, notes")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+          rawPositions = positions || []
+        } else if (anonymousPositions && anonymousPositions.length > 0) {
+          rawPositions = anonymousPositions.map((p: any) => ({
+            symbol: p.symbol,
+            name: p.name,
+            asset_type: p.asset_type,
+            shares: p.shares,
+            cost_basis_per_share: p.cost_basis_per_share,
+            purchase_date: p.purchase_date,
+            notes: p.notes,
+          }))
+        }
+
+        if (rawPositions.length === 0) {
+          return JSON.stringify({
+            positions: [],
+            message: userId
+              ? "Portfolio is empty -- user has not added any positions yet"
+              : "No portfolio in this guest session",
+            anonymous: !userId,
+          })
+        }
+
+        const symbols = [...new Set(rawPositions.map((p) => p.symbol))]
+        const [quotesRes, metaRes] = await Promise.all([
+          callInternalFunction("stock-quote", { symbols }),
+          callInternalFunction("asset-metadata", { symbols }),
+        ])
+        const quotes = quotesRes?.quotes || {}
+        const metadata = metaRes?.metadata || {}
+
+        const round2 = (n: number) => Math.round(n * 100) / 100
+        const enriched = rawPositions.map((p: any) => {
+          const q = quotes[p.symbol]
+          const meta = metadata[p.symbol]
+          const shares = Number(p.shares)
+          const basis = Number(p.cost_basis_per_share)
+          const totalCost = shares * basis
+          const price = q?.price ?? null
+          const marketValue = price != null ? shares * price : totalCost
+          const unrealizedReturn = marketValue - totalCost
+          const unrealizedReturnPercent = totalCost > 0
+            ? (unrealizedReturn / totalCost) * 100
+            : null
+          return {
+            symbol: p.symbol,
+            name: p.name,
+            assetType: p.asset_type,
+            sector: meta?.sector || "Uncategorized",
+            industry: meta?.industry || null,
+            shares,
+            costBasisPerShare: round2(basis),
+            totalCost: round2(totalCost),
+            currentPrice: price != null ? round2(price) : null,
+            marketValue: round2(marketValue),
+            unrealizedReturn: round2(unrealizedReturn),
+            unrealizedReturnPercent: unrealizedReturnPercent != null ? round2(unrealizedReturnPercent) : null,
+            dayChangePercent: q?.changePercent ?? null,
+            purchaseDate: p.purchase_date,
+            notes: p.notes ? String(p.notes).slice(0, 200) : null,
+            hasLiveQuote: price != null,
+          }
+        })
+
+        let totalValue = 0
+        let totalCost = 0
+        let dayChange = 0
+        let prevDayValue = 0
+        let unpricedCount = 0
+        for (const p of enriched) {
+          totalCost += p.totalCost
+          totalValue += p.marketValue
+          if (!p.hasLiveQuote) {
+            unpricedCount += 1
+          } else if (p.dayChangePercent != null && p.currentPrice != null) {
+            const prevPrice = p.currentPrice / (1 + p.dayChangePercent / 100)
+            const prevValue = p.shares * prevPrice
+            dayChange += (p.marketValue - prevValue)
+            prevDayValue += prevValue
+          }
+        }
+        const totalReturn = totalValue - totalCost
+        const totalReturnPercent = totalCost > 0 ? (totalReturn / totalCost) * 100 : null
+        const dayChangePercent = prevDayValue > 0 ? (dayChange / prevDayValue) * 100 : null
+
+        for (const p of enriched) {
+          ;(p as any).percentOfPortfolio = totalValue > 0
+            ? round2((p.marketValue / totalValue) * 100)
+            : 0
+        }
+
+        const byAssetClassMap: Record<string, { value: number; count: number }> = {}
+        const bySectorMap: Record<string, { value: number; count: number }> = {}
+        for (const p of enriched) {
+          if (!byAssetClassMap[p.assetType]) byAssetClassMap[p.assetType] = { value: 0, count: 0 }
+          byAssetClassMap[p.assetType].value += p.marketValue
+          byAssetClassMap[p.assetType].count += 1
+          if (!bySectorMap[p.sector]) bySectorMap[p.sector] = { value: 0, count: 0 }
+          bySectorMap[p.sector].value += p.marketValue
+          bySectorMap[p.sector].count += 1
+        }
+        const byAssetClass = Object.entries(byAssetClassMap)
+          .map(([key, v]) => ({
+            class: key,
+            value: round2(v.value),
+            percent: totalValue > 0 ? round2((v.value / totalValue) * 100) : 0,
+            positionCount: v.count,
+          }))
+          .sort((a, b) => b.value - a.value)
+        const bySector = Object.entries(bySectorMap)
+          .map(([key, v]) => ({
+            sector: key,
+            value: round2(v.value),
+            percent: totalValue > 0 ? round2((v.value / totalValue) * 100) : 0,
+            positionCount: v.count,
+          }))
+          .sort((a, b) => b.value - a.value)
+
+        const sorted = [...enriched].sort((a, b) => b.marketValue - a.marketValue)
+        const topHoldings = sorted.slice(0, 5).map((p) => ({
+          symbol: p.symbol,
+          value: p.marketValue,
+          percent: (p as any).percentOfPortfolio,
+        }))
+        const top3Percent = topHoldings.slice(0, 3).reduce((s, h) => s + h.percent, 0)
+
+        return JSON.stringify({
+          totalPositions: enriched.length,
+          aggregates: {
+            totalValue: round2(totalValue),
+            totalCost: round2(totalCost),
+            totalReturn: round2(totalReturn),
+            totalReturnPercent: totalReturnPercent != null ? round2(totalReturnPercent) : null,
+            dayChange: round2(dayChange),
+            dayChangePercent: dayChangePercent != null ? round2(dayChangePercent) : null,
+            unpricedCount,
+          },
+          positions: enriched,
+          allocation: { byAssetClass, bySector },
+          concentration: { topHoldings, top3Percent: round2(top3Percent) },
+          anonymous: !userId,
+        })
+      }
+      case "propose_trade": {
+        const rationale = String(toolInput?.rationale || '').slice(0, 1000)
+        const rawChanges = Array.isArray(toolInput?.changes) ? toolInput.changes : []
+        if (rawChanges.length === 0) {
+          return JSON.stringify({ error: "At least one change required in 'changes' array" })
+        }
+        if (rawChanges.length > 10) {
+          return JSON.stringify({ error: "Too many changes (max 10 per proposal)" })
+        }
+        const allowedActions = new Set(["buy", "sell", "trim", "add"])
+        const normalized = rawChanges
+          .map((c: any) => ({
+            action: String(c.action || '').toLowerCase(),
+            symbol: String(c.symbol || '').toUpperCase(),
+            assetType: String(c.assetType || c.asset_type || 'stock'),
+            shares: Number(c.shares) || 0,
+            reason: String(c.reason || '').slice(0, 300),
+          }))
+          .filter((c: any) =>
+            c.symbol && c.shares > 0 && allowedActions.has(c.action)
+          )
+        if (normalized.length === 0) {
+          return JSON.stringify({ error: "No valid changes after normalization -- check action values and share counts" })
+        }
+        // The tool response is what the model sees; the UI reads tool_input directly.
+        return JSON.stringify({
+          status: "proposal_sent",
+          message: "Proposal rendered in the UI. User can Simulate to preview impact, Apply (trim/sell only) to commit, or Dismiss.",
+          rationale,
+          changeCount: normalized.length,
+          changes: normalized,
+        })
+      }
       default:
         return JSON.stringify({ error: `Unknown tool: ${toolName}` })
     }
@@ -214,6 +434,7 @@ async function buildPortfolioSnapshot(
   supabaseAdmin: any,
   userId: string | null,
   anonymousWatchlist: any[] | null,
+  anonymousPositions: any[] | null,
 ): Promise<string> {
   const parts: string[] = []
   const today = new Date().toISOString().slice(0, 10)
@@ -234,8 +455,20 @@ async function buildPortfolioSnapshot(
     } else {
       parts.push("SESSION WATCHLIST: empty (user has not added any tickers yet)")
     }
+    if (anonymousPositions && anonymousPositions.length > 0) {
+      let totalCost = 0
+      for (const p of anonymousPositions) {
+        totalCost += Number(p.shares) * Number(p.cost_basis_per_share)
+      }
+      parts.push("")
+      parts.push(`SESSION PORTFOLIO (${anonymousPositions.length} positions, $${totalCost.toFixed(0)} cost basis, not saved -- call get_portfolio for live values):`)
+      for (const p of anonymousPositions) {
+        const typeLabel = p.asset_type === 'mutual_fund' ? 'mutual fund' : p.asset_type
+        parts.push(`- ${p.symbol}${p.name ? ` (${p.name})` : ""}: ${Number(p.shares)} shares @ $${Number(p.cost_basis_per_share).toFixed(2)} (${typeLabel})`)
+      }
+    }
     parts.push("")
-    parts.push("NOTE: Guest user has no saved research bench. If they ask about their portfolio, their session watchlist above is all you have.")
+    parts.push("NOTE: Guest user has no saved research bench. Session data above disappears on refresh.")
     return parts.join("\n")
   }
 
@@ -276,6 +509,27 @@ async function buildPortfolioSnapshot(
     }
   } catch (_) { /* silent */ }
 
+  try {
+    const { data: positions } = await supabaseAdmin
+      .from("positions")
+      .select("symbol, name, asset_type, shares, cost_basis_per_share")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(30)
+    if (positions && positions.length > 0) {
+      let totalCost = 0
+      for (const p of positions) {
+        totalCost += Number(p.shares) * Number(p.cost_basis_per_share)
+      }
+      parts.push("")
+      parts.push(`USER PORTFOLIO (${positions.length} positions, $${totalCost.toFixed(0)} cost basis -- call get_portfolio for live values, gain/loss, sector breakdown):`)
+      for (const p of positions) {
+        const typeLabel = p.asset_type === 'mutual_fund' ? 'mutual fund' : p.asset_type
+        parts.push(`- ${p.symbol}${p.name ? ` (${p.name})` : ""}: ${Number(p.shares)} shares @ $${Number(p.cost_basis_per_share).toFixed(2)} (${typeLabel})`)
+      }
+    }
+  } catch (_) { /* silent */ }
+
   return parts.join("\n")
 }
 
@@ -310,7 +564,7 @@ serve(async (req) => {
       conversationId?: string
       userMessage: string
       modelKey?: "sonnet" | "opus" | "haiku"
-      anonymousContext?: { watchlist?: any[] }
+      anonymousContext?: { watchlist?: any[]; positions?: any[] }
       priorMessages?: Array<{ role: string; content: string }>
     }
 
@@ -320,6 +574,7 @@ serve(async (req) => {
 
     const modelId = MODEL_IDS[modelKey] || MODEL_IDS.sonnet
     const anonymousWatchlist = anonymousContext?.watchlist || null
+    const anonymousPositions = anonymousContext?.positions || null
 
     // Conversation handling: authenticated writes to DB, anonymous works in memory
     let conversationId = incomingConvId
@@ -357,7 +612,7 @@ serve(async (req) => {
       claudeMessages.push({ role: "user", content: userMessage })
     }
 
-    const snapshot = await buildPortfolioSnapshot(supabaseAdmin, userId, anonymousWatchlist)
+    const snapshot = await buildPortfolioSnapshot(supabaseAdmin, userId, anonymousWatchlist, anonymousPositions)
     const systemPrompt = `${SYSTEM_PROMPT_BASE}\n\n=== PORTFOLIO CONTEXT ===\n${snapshot}\n=== END CONTEXT ===`
 
     const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY")
@@ -481,7 +736,7 @@ serve(async (req) => {
                 continue
               }
               emit("tool_call", { id: tu.id, name: tu.name, input: tu.input, status: "running" })
-              const resultStr = await executeTool(tu.name, tu.input, supabaseAdmin, userId, anonymousWatchlist)
+              const resultStr = await executeTool(tu.name, tu.input, supabaseAdmin, userId, anonymousWatchlist, anonymousPositions)
               let resultParsed: any = null
               try { resultParsed = JSON.parse(resultStr) } catch { resultParsed = { raw: resultStr } }
               const isErr = resultParsed?.error != null
@@ -549,6 +804,19 @@ function summarizeToolResult(toolName: string, result: any): string {
     case "get_user_watchlist": {
       const n = (result.watchlist || []).length
       return result.anonymous ? `${n} session positions` : `${n} positions`
+    }
+    case "get_portfolio": {
+      const n = result.totalPositions ?? 0
+      if (n === 0) return "portfolio empty"
+      const value = result.aggregates?.totalValue
+      const ret = result.aggregates?.totalReturnPercent
+      const valStr = value != null ? `$${Math.round(value).toLocaleString()}` : "?"
+      const retStr = ret != null ? `${ret >= 0 ? "+" : ""}${ret.toFixed(1)}%` : "?"
+      return `${n} positions, ${valStr} (${retStr})`
+    }
+    case "propose_trade": {
+      const n = result.changeCount ?? 0
+      return n === 1 ? "1 proposed change" : `${n} proposed changes`
     }
     default: return "ok"
   }

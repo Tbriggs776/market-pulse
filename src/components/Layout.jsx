@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, Link, useLocation } from 'react-router-dom'
 import {
-  LayoutDashboard, Star, Search, Landmark, Bot,
+  LayoutDashboard, Star, Search, Landmark, Bot, PieChart,
   LogOut, LogIn, Menu, X,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -10,6 +10,7 @@ import StatePicker from './StatePicker'
 
 const NAV_ITEMS_AUTHED = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/portfolio', label: 'Portfolio', icon: PieChart },
   { to: '/watchlist', label: 'Watchlist', icon: Star },
   { to: '/research', label: 'Research', icon: Search },
   { to: '/government', label: 'Government', icon: Landmark },
