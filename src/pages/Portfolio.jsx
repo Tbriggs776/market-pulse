@@ -8,6 +8,7 @@ import { stocksService, metadataService } from '../lib/api'
 import { portfolioApi } from '../lib/supabase'
 import AllocationBreakdown from '../components/portfolio/AllocationBreakdown'
 import AddPositionModal from '../components/portfolio/AddPositionModal'
+import ProjectionsPanel from '../components/portfolio/ProjectionsPanel'
 
 const ASSET_TYPE_LABEL = {
   stock: 'Stock',
@@ -242,6 +243,11 @@ export default function Portfolio() {
           quotes={quotes}
           metadata={metadata}
         />
+      )}
+
+      {/* Projections */}
+      {positions.length > 0 && (
+        <ProjectionsPanel positions={positions} quotes={quotes} />
       )}
 
       <AddPositionModal

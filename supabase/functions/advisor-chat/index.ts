@@ -184,6 +184,51 @@ function consumeAverageCost(openLots: OpenLot[], shares: number, sellPrice: numb
   return { realizedShort, realizedLong }
 }
 
+// --- Return projections (mirrors src/lib/projections.js) ---
+// Analytical geometric Brownian motion. Portfolio mu/sigma are value-weighted.
+const ASSET_CLASS_ASSUMPTIONS: Record<string, { mu: number; sigma: number }> = {
+  stock:       { mu: 0.10, sigma: 0.18 },
+  etf:         { mu: 0.09, sigma: 0.15 },
+  mutual_fund: { mu: 0.08, sigma: 0.12 },
+}
+const Z_P10 = -1.2815515655446004
+const Z_P90 = 1.2815515655446004
+const PROJECTION_HORIZONS = [1, 5, 10, 20, 30]
+
+function projectPoint(V0: number, mu: number, sigma: number, T: number) {
+  if (T <= 0) return { years: 0, p10: V0, p50: V0, p90: V0 }
+  const drift = (mu - (sigma * sigma) / 2) * T
+  const diffusion = sigma * Math.sqrt(T)
+  return {
+    years: T,
+    p10: V0 * Math.exp(drift + Z_P10 * diffusion),
+    p50: V0 * Math.exp(drift),
+    p90: V0 * Math.exp(drift + Z_P90 * diffusion),
+  }
+}
+
+function computeProjectionsFromEnriched(enriched: any[]): {
+  currentValue: number
+  mu: number
+  sigma: number
+  points: Array<{ years: number; p10: number; p50: number; p90: number }>
+} {
+  let totalValue = 0
+  for (const p of enriched) totalValue += p.marketValue
+  if (totalValue <= 0) return { currentValue: 0, mu: 0, sigma: 0, points: [] }
+
+  let weightedMu = 0
+  let weightedSigma = 0
+  for (const p of enriched) {
+    const a = ASSET_CLASS_ASSUMPTIONS[p.assetType] || ASSET_CLASS_ASSUMPTIONS.stock
+    const weight = p.marketValue / totalValue
+    weightedMu += weight * a.mu
+    weightedSigma += weight * a.sigma
+  }
+  const points = PROJECTION_HORIZONS.map((T) => projectPoint(totalValue, weightedMu, weightedSigma, T))
+  return { currentValue: totalValue, mu: weightedMu, sigma: weightedSigma, points }
+}
+
 function computePositionsFromTransactions(transactions: Txn[]): DerivedPosition[] {
   if (!transactions || transactions.length === 0) return []
   const groups = new Map<string, Txn[]>()
@@ -328,6 +373,8 @@ TAX-AWARE SELLING: get_portfolio returns per-position lot detail (buy date, cost
 - HIFO: minimizes realized gain by selling highest-cost-basis lots first -- the default move for tax-loss harvesting or when the user wants to defer taxes
 - average_cost: required for mutual_fund; rarely the right call for stocks/ETFs with dispersed cost bases
 When one method produces materially different tax outcomes than another (e.g. HIFO realizes a loss while FIFO realizes a gain), say so in the rationale and set lotMethod explicitly. If a short-term lot is within weeks of crossing one year, mention it rather than proposing an immediate sale.
+
+RETURN PROJECTIONS: get_portfolio also returns a `projections` block with 10th/50th/90th percentile outcomes at 1, 5, 10, 20, and 30 years, derived from value-weighted asset-class historical averages (stocks 10/18, ETFs 9/15, mutual funds 8/12 mu/sigma annualized). When the user asks "am I on track" or "what's this worth in 10 years" kinds of questions, cite these percentiles. ALWAYS frame them as illustrative ranges, not forecasts -- "the median path gets you to X, with a 10-to-90 range of Y to Z" is the right pattern. Never say "you will have" about a projected value. The model ignores contributions, taxes, sequence-of-returns risk, and correlation; surface those caveats when the user is making a consequential decision based on the numbers.
 
 RESEARCH COPILOT MODE (when user is exploring a thesis, asking "what do you think about X," or working through an analysis): Socratic, exploratory, suggest angles they haven't considered, play devil's advocate on their thesis, surface counterfactuals and second-order effects.
 
@@ -707,6 +754,8 @@ async function executeTool(
           realizedLongTerm += p.realizedLongTerm
         }
 
+        const projections = computeProjectionsFromEnriched(enriched)
+
         return JSON.stringify({
           totalPositions: enriched.length,
           aggregates: {
@@ -725,6 +774,19 @@ async function executeTool(
           positions: enriched,
           allocation: { byAssetClass, bySector },
           concentration: { topHoldings, top3Percent: round2(top3Percent) },
+          projections: {
+            assumptions: {
+              mu: Math.round(projections.mu * 10000) / 10000,
+              sigma: Math.round(projections.sigma * 10000) / 10000,
+              note: "Analytical GBM on value-weighted asset-class defaults. Illustrative range, not a forecast. Excludes contributions, taxes, inter-asset correlation.",
+            },
+            horizons: projections.points.map((pt) => ({
+              years: pt.years,
+              p10: round2(pt.p10),
+              p50: round2(pt.p50),
+              p90: round2(pt.p90),
+            })),
+          },
           anonymous: !userId,
         })
       }
