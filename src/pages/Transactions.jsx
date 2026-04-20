@@ -50,6 +50,8 @@ const EMPTY_FORM = {
   occurredAt: new Date().toISOString().slice(0, 10),
   lotMethod: '',
   notes: '',
+  drip: false,
+  reinvestPrice: '',
 }
 
 function formatPrice(n) {
@@ -115,6 +117,26 @@ export default function Transactions() {
     },
   })
 
+  // DRIP = two logically-coupled writes (dividend + buy). Supabase doesn't
+  // give us a client-side cross-row transaction, so on buy failure we roll
+  // the dividend back best-effort. Rare edge case, worst-case manual cleanup.
+  const dripMutation = useMutation({
+    mutationFn: async ({ dividend, buy }) => {
+      const created = await transactionsApi.add({ ...dividend, source: 'drip' })
+      try {
+        await transactionsApi.add({ ...buy, source: 'drip' })
+      } catch (err) {
+        try { await transactionsApi.remove(created.id) } catch (_) { /* orphan -- surface in UI */ }
+        throw err
+      }
+      return created
+    },
+    onSuccess: () => {
+      invalidateAll()
+      closeForm()
+    },
+  })
+
   const updateMutation = useMutation({
     mutationFn: ({ id, patch }) => transactionsApi.update(id, patch),
     onSuccess: () => {
@@ -166,6 +188,10 @@ export default function Transactions() {
     if (form.type === 'dividend') {
       const amt = parseFloat(form.totalAmount)
       if (!Number.isFinite(amt) || amt <= 0) return 'Dividend amount must be > 0'
+      if (form.drip) {
+        const price = parseFloat(form.reinvestPrice)
+        if (!Number.isFinite(price) || price <= 0) return 'Reinvest price must be > 0'
+      }
     } else {
       const sh = parseFloat(form.shares)
       const pr = parseFloat(form.pricePerShare)
@@ -215,12 +241,31 @@ export default function Transactions() {
           notes: base.notes,
         },
       })
+    } else if (form.type === 'dividend' && form.drip) {
+      const reinvestPrice = parseFloat(form.reinvestPrice)
+      const reinvestShares = parseFloat(form.totalAmount) / reinvestPrice
+      dripMutation.mutate({
+        dividend: base,
+        buy: {
+          symbol: base.symbol,
+          name: base.name,
+          assetType: base.assetType,
+          transactionType: 'buy',
+          shares: reinvestShares,
+          pricePerShare: reinvestPrice,
+          totalAmount: reinvestShares * reinvestPrice,
+          occurredAt: base.occurredAt,
+          notes: base.notes
+            ? `${base.notes} (DRIP reinvestment)`
+            : 'DRIP reinvestment',
+        },
+      })
     } else {
       addMutation.mutate(base)
     }
   }
 
-  const pending = addMutation.isPending || updateMutation.isPending
+  const pending = addMutation.isPending || updateMutation.isPending || dripMutation.isPending
 
   return (
     <div className="space-y-6">
@@ -290,7 +335,7 @@ export default function Transactions() {
           setForm={setForm}
           mode={formMode}
           pending={pending}
-          error={formError || addMutation.error?.message || updateMutation.error?.message}
+          error={formError || addMutation.error?.message || updateMutation.error?.message || dripMutation.error?.message}
           onSave={handleSave}
           onCancel={closeForm}
         />
@@ -366,7 +411,7 @@ export default function Transactions() {
                   <div className="text-sm text-ivory font-mono">
                     {formatDate(t.occurred_at)}
                   </div>
-                  {t.source && t.source !== 'manual' && (
+                  {t.source && t.source !== 'manual' && t.source !== 'drip' && (
                     <div className="text-[10px] text-text-muted">{t.source}</div>
                   )}
                 </div>
@@ -386,6 +431,11 @@ export default function Transactions() {
                     {t.lot_method && (
                       <span className="text-[9px] uppercase tracking-wide text-gold bg-gold/5 border border-gold/20 px-1.5 py-0.5 rounded">
                         {t.lot_method}
+                      </span>
+                    )}
+                    {t.source === 'drip' && (
+                      <span className="text-[9px] uppercase tracking-wide text-gold bg-gold/5 border border-gold/20 px-1.5 py-0.5 rounded">
+                        DRIP
                       </span>
                     )}
                   </div>
@@ -589,21 +639,68 @@ function TransactionForm({ form, setForm, mode, pending, error, onSave, onCancel
       )}
 
       {isDividend && (
-        <div>
-          <label className="block text-[10px] uppercase tracking-wide text-text-muted mb-1.5">
-            Dividend amount
-          </label>
-          <input
-            type="number"
-            inputMode="decimal"
-            step="any"
-            min="0"
-            value={form.totalAmount}
-            onChange={(e) => updateField('totalAmount', e.target.value)}
-            placeholder="Cash received"
-            className="input w-full font-mono"
-          />
-        </div>
+        <>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-text-muted mb-1.5">
+              Dividend amount
+            </label>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="any"
+              min="0"
+              value={form.totalAmount}
+              onChange={(e) => updateField('totalAmount', e.target.value)}
+              placeholder="Cash received"
+              className="input w-full font-mono"
+            />
+          </div>
+
+          {mode === 'add' && (
+            <div className="rounded-lg border border-border bg-surface/50 p-3 space-y-3">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.drip}
+                  onChange={(e) => updateField('drip', e.target.checked)}
+                  className="mt-0.5 accent-gold"
+                />
+                <div>
+                  <div className="text-xs text-ivory font-medium">
+                    Reinvest as shares (DRIP)
+                  </div>
+                  <div className="text-[10px] text-text-muted leading-snug">
+                    Records the dividend AND a matching buy at the reinvestment price.
+                    Your share count grows, avg cost basis adjusts automatically.
+                  </div>
+                </div>
+              </label>
+
+              {form.drip && (
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wide text-text-muted mb-1.5">
+                    Reinvest price per share
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="any"
+                    min="0"
+                    value={form.reinvestPrice}
+                    onChange={(e) => updateField('reinvestPrice', e.target.value)}
+                    placeholder="Market price on pay date"
+                    className="input w-full font-mono"
+                  />
+                  {form.totalAmount && form.reinvestPrice && parseFloat(form.reinvestPrice) > 0 && (
+                    <div className="text-[10px] text-text-muted mt-1">
+                      → adds {(parseFloat(form.totalAmount) / parseFloat(form.reinvestPrice)).toFixed(4)} shares
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {isSell && (
