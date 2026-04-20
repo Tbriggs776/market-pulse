@@ -303,7 +303,7 @@ export default function Portfolio() {
       {/* Holdings table */}
       {!listLoading && positions.length > 0 && (
         <div className="space-y-2">
-          <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
+          <div className="hidden sm:grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
             <div className="col-span-3">Symbol</div>
             <div className="col-span-2 text-right">Shares / Cost</div>
             <div className="col-span-2 text-right">Price / Day</div>
@@ -333,10 +333,10 @@ export default function Portfolio() {
               >
                 <div
                   onClick={() => toggleExpanded(p.id)}
-                  className="grid grid-cols-12 gap-4 items-center p-5 cursor-pointer"
+                  className="grid grid-cols-2 sm:grid-cols-12 gap-3 sm:gap-4 items-center p-4 sm:p-5 cursor-pointer"
                 >
                   {/* Symbol + Name + Asset type */}
-                  <div className="col-span-3">
+                  <div className="col-span-2 sm:col-span-3">
                     <div className="flex items-center gap-3">
                       <div className="text-text-muted">
                         {isExpanded ? (
@@ -369,7 +369,8 @@ export default function Portfolio() {
                   </div>
 
                   {/* Shares / Cost */}
-                  <div className="col-span-2 text-right">
+                  <div className="sm:col-span-2 text-right">
+                    <div className="text-[10px] sm:hidden uppercase tracking-wide text-text-muted">Shares</div>
                     <div className="font-mono text-ivory text-sm">
                       {formatShares(pShares)}
                     </div>
@@ -379,7 +380,8 @@ export default function Portfolio() {
                   </div>
 
                   {/* Price / Day */}
-                  <div className="col-span-2 text-right">
+                  <div className="sm:col-span-2 text-right">
+                    <div className="text-[10px] sm:hidden uppercase tracking-wide text-text-muted">Price</div>
                     {quotesLoading ? (
                       <div className="h-4 bg-surface-elevated rounded w-16 ml-auto animate-pulse" />
                     ) : q ? (
@@ -397,7 +399,8 @@ export default function Portfolio() {
                   </div>
 
                   {/* Market Value */}
-                  <div className="col-span-2 text-right">
+                  <div className="sm:col-span-2 text-right">
+                    <div className="text-[10px] sm:hidden uppercase tracking-wide text-text-muted">Value</div>
                     <div className="font-mono text-ivory text-sm">
                       {formatPrice(value ?? cost)}
                     </div>
@@ -407,7 +410,8 @@ export default function Portfolio() {
                   </div>
 
                   {/* Gain / Loss */}
-                  <div className="col-span-2 text-right">
+                  <div className="sm:col-span-2 text-right">
+                    <div className="text-[10px] sm:hidden uppercase tracking-wide text-text-muted">Gain / Loss</div>
                     {gainDollar !== null ? (
                       <>
                         <div className={`font-mono text-sm ${glPositive ? 'text-positive' : 'text-crimson'}`}>
@@ -423,7 +427,7 @@ export default function Portfolio() {
                   </div>
 
                   {/* Actions */}
-                  <div className="col-span-1 text-right">
+                  <div className="col-span-2 sm:col-span-1 flex justify-end">
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
@@ -492,7 +496,7 @@ function LotDetail({ lots, symbol, currentPrice, formatPrice, formatShares, form
             </Link>
           )}
         </div>
-        <div className="grid grid-cols-12 gap-4 py-1.5 text-[10px] text-text-muted uppercase tracking-wide">
+        <div className="hidden sm:grid grid-cols-12 gap-4 py-1.5 text-[10px] text-text-muted uppercase tracking-wide">
           <div className="col-span-3">Bought</div>
           <div className="col-span-2 text-right">Shares</div>
           <div className="col-span-2 text-right">Cost / share</div>
@@ -511,18 +515,23 @@ function LotDetail({ lots, symbol, currentPrice, formatPrice, formatShares, form
           return (
             <div
               key={i}
-              className="grid grid-cols-12 gap-4 py-2 items-center border-t border-border/40 text-xs"
+              className="grid grid-cols-2 sm:grid-cols-12 gap-2 sm:gap-4 py-2 items-center border-t border-border/40 text-xs"
             >
-              <div className="col-span-3 font-mono text-ivory">
-                {lot.buy_date}
+              <div className="col-span-2 sm:col-span-3 flex items-center gap-2 font-mono text-ivory">
+                <span>{lot.buy_date}</span>
+                <span className={`sm:hidden text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded ${isLong ? 'bg-positive/10 text-positive' : 'bg-gold/10 text-gold'}`}>
+                  {isLong ? 'LT' : 'ST'} {lot.days_held}d
+                </span>
               </div>
-              <div className="col-span-2 text-right font-mono text-ivory">
+              <div className="sm:col-span-2 text-right font-mono text-ivory">
+                <span className="sm:hidden text-text-muted text-[10px] uppercase mr-1">Shares</span>
                 {formatShares(shares)}
               </div>
-              <div className="col-span-2 text-right font-mono text-ivory">
+              <div className="sm:col-span-2 text-right font-mono text-ivory">
+                <span className="sm:hidden text-text-muted text-[10px] uppercase mr-1">Cost</span>
                 {formatPrice(basis)}
               </div>
-              <div className="col-span-2 text-right">
+              <div className="hidden sm:block sm:col-span-2 text-right">
                 <div className="flex items-center justify-end gap-1.5">
                   <span className="font-mono text-text-secondary text-[11px]">
                     {lot.days_held}d
@@ -532,7 +541,7 @@ function LotDetail({ lots, symbol, currentPrice, formatPrice, formatShares, form
                   </span>
                 </div>
               </div>
-              <div className="col-span-3 text-right">
+              <div className="col-span-2 sm:col-span-3 text-right">
                 {gain !== null ? (
                   <>
                     <div className={`font-mono text-sm ${gainPositive ? 'text-positive' : 'text-crimson'}`}>

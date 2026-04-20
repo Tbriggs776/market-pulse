@@ -65,7 +65,7 @@ export default function Layout() {
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
       <header className="sticky top-0 z-50 bg-canvas/95 backdrop-blur border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
+        <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-3">
           <BrandMark />
 
           {/* Desktop nav */}
@@ -129,7 +129,7 @@ export default function Layout() {
         {/* Mobile drawer */}
         {mobileOpen && (
           <div className="md:hidden border-t border-border bg-canvas/95 backdrop-blur">
-            <nav className="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-1" role="navigation">
+            <nav className="max-w-screen-2xl mx-auto px-4 py-3 flex flex-col gap-1" role="navigation">
               {navItems.map((item) => (
                 <NavLink
                   key={item.to}
@@ -165,7 +165,7 @@ export default function Layout() {
       </main>
 
       <footer className="border-t border-border py-6">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-text-muted">
+        <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-text-muted">
           <div className="flex items-center gap-2">
             <span className="font-serif text-[10px] tracking-[0.2em] text-gold/60">
               MARKET PULSE

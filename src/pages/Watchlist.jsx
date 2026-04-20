@@ -291,7 +291,7 @@ export default function Watchlist() {
       {!listLoading && watchlist.length > 0 && (
         <div className="space-y-2">
           {/* Table header */}
-          <div className="grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
+          <div className="hidden sm:grid grid-cols-12 gap-4 px-5 py-2 text-xs text-text-muted uppercase tracking-wide">
             <div className="col-span-4">Symbol</div>
             <div className="col-span-2 text-right">Price</div>
             <div className="col-span-2 text-right">Day Change</div>
@@ -309,10 +309,10 @@ export default function Watchlist() {
             return (
               <div
                 key={item.id}
-                className="card grid grid-cols-12 gap-4 items-center hover:border-gold-dim transition-colors"
+                className="card grid grid-cols-2 sm:grid-cols-12 gap-3 sm:gap-4 items-center hover:border-gold-dim transition-colors"
               >
                 {/* Symbol + Name */}
-                <div className="col-span-4">
+                <div className="col-span-2 sm:col-span-4">
                   <div className="flex items-center gap-3">
                     <div className={`p-1.5 rounded ${dayPositive === false ? 'bg-crimson/10' : 'bg-positive/10'}`}>
                       {dayPositive === false ? (
@@ -333,7 +333,8 @@ export default function Watchlist() {
                 </div>
 
                 {/* Current Price */}
-                <div className="col-span-2 text-right">
+                <div className="sm:col-span-2 text-right">
+                  <div className="text-[10px] sm:hidden uppercase tracking-wide text-text-muted">Price</div>
                   {quotesLoading ? (
                     <div className="h-4 bg-surface-elevated rounded w-16 ml-auto animate-pulse" />
                   ) : (
@@ -344,7 +345,8 @@ export default function Watchlist() {
                 </div>
 
                 {/* Day Change */}
-                <div className="col-span-2 text-right">
+                <div className="sm:col-span-2 text-right">
+                  <div className="text-[10px] sm:hidden uppercase tracking-wide text-text-muted">Day</div>
                   {quotesLoading ? (
                     <div className="h-4 bg-surface-elevated rounded w-14 ml-auto animate-pulse" />
                   ) : quote ? (
@@ -357,7 +359,8 @@ export default function Watchlist() {
                 </div>
 
                 {/* Since Added */}
-                <div className="col-span-2 text-right">
+                <div className="sm:col-span-2 text-right">
+                  <div className="text-[10px] sm:hidden uppercase tracking-wide text-text-muted">Since added</div>
                   {gl !== null ? (
                     <div>
                       <span className={`font-mono text-sm ${glPositive ? 'text-positive' : 'text-crimson'}`}>
@@ -373,7 +376,7 @@ export default function Watchlist() {
                 </div>
 
                 {/* Actions */}
-                <div className="col-span-2 text-right">
+                <div className="col-span-2 sm:col-span-2 flex justify-end">
                   <button
                     onClick={() => removeMutation.mutate(item.id)}
                     disabled={removeMutation.isPending}
