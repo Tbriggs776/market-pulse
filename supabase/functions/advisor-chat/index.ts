@@ -92,7 +92,7 @@ function defaultLotMethod(assetType: string): string {
 function resolveLotMethod(txn: Txn, assetType: string): string {
   if (!txn.lot_method) return 'average_cost' // legacy sells
   const m = String(txn.lot_method).toLowerCase()
-  if (m === 'fifo' || m === 'average_cost') return m
+  if (m === 'fifo' || m === 'lifo' || m === 'hifo' || m === 'average_cost') return m
   return defaultLotMethod(assetType)
 }
 
@@ -110,6 +110,46 @@ function consumeFifo(openLots: OpenLot[], shares: number, sellPrice: number, sel
     lot.shares -= take
     remaining -= take
     if (lot.shares <= CLOSED_EPSILON) openLots.shift()
+  }
+  return { realizedShort, realizedLong }
+}
+
+function consumeLifo(openLots: OpenLot[], shares: number, sellPrice: number, sellDate: string) {
+  let remaining = shares
+  let realizedShort = 0
+  let realizedLong = 0
+  while (remaining > CLOSED_EPSILON && openLots.length > 0) {
+    const lot = openLots[openLots.length - 1]
+    const take = Math.min(lot.shares, remaining)
+    const gain = (sellPrice - lot.costBasis) * take
+    const held = daysBetween(lot.buyDate, sellDate)
+    if (held > LONG_TERM_DAYS) realizedLong += gain
+    else realizedShort += gain
+    lot.shares -= take
+    remaining -= take
+    if (lot.shares <= CLOSED_EPSILON) openLots.pop()
+  }
+  return { realizedShort, realizedLong }
+}
+
+function consumeHifo(openLots: OpenLot[], shares: number, sellPrice: number, sellDate: string) {
+  let remaining = shares
+  let realizedShort = 0
+  let realizedLong = 0
+  const sorted = [...openLots].sort((a, b) => b.costBasis - a.costBasis)
+  for (const lot of sorted) {
+    if (remaining <= CLOSED_EPSILON) break
+    if (lot.shares <= CLOSED_EPSILON) continue
+    const take = Math.min(lot.shares, remaining)
+    const gain = (sellPrice - lot.costBasis) * take
+    const held = daysBetween(lot.buyDate, sellDate)
+    if (held > LONG_TERM_DAYS) realizedLong += gain
+    else realizedShort += gain
+    lot.shares -= take
+    remaining -= take
+  }
+  for (let i = openLots.length - 1; i >= 0; i--) {
+    if (openLots[i].shares <= CLOSED_EPSILON) openLots.splice(i, 1)
   }
   return { realizedShort, realizedLong }
 }
@@ -198,9 +238,16 @@ function computePositionsFromTransactions(transactions: Txn[]): DerivedPosition[
         if (sellShares <= 0) continue
         const [_, assetType] = key.split(':')
         const method = resolveLotMethod(t, assetType)
-        const { realizedShort: rs, realizedLong: rl } = method === 'fifo'
-          ? consumeFifo(openLots, sellShares, sellPrice, t.occurred_at)
-          : consumeAverageCost(openLots, sellShares, sellPrice, t.occurred_at)
+        let rs = 0, rl = 0
+        if (method === 'fifo') {
+          ;({ realizedShort: rs, realizedLong: rl } = consumeFifo(openLots, sellShares, sellPrice, t.occurred_at))
+        } else if (method === 'lifo') {
+          ;({ realizedShort: rs, realizedLong: rl } = consumeLifo(openLots, sellShares, sellPrice, t.occurred_at))
+        } else if (method === 'hifo') {
+          ;({ realizedShort: rs, realizedLong: rl } = consumeHifo(openLots, sellShares, sellPrice, t.occurred_at))
+        } else {
+          ;({ realizedShort: rs, realizedLong: rl } = consumeAverageCost(openLots, sellShares, sellPrice, t.occurred_at))
+        }
         realizedShort += rs
         realizedLong += rl
       } else if (t.transaction_type === 'dividend') {
@@ -275,7 +322,12 @@ const SYSTEM_PROMPT_BASE = `You are the Market Pulse Advisor, a portfolio-aware 
 
 PORTFOLIO CFO MODE (default when user asks about their positions, allocation, sizing, exposure, or "should I"): concise, data-forward, institutional tone. Cite specific tickers from the user's portfolio and watchlist by name. Reference current macro data when relevant. Give concrete recommendations with reasoning, not hedged advice. You can be direct about concerns. When the user asks about their holdings, allocation, sector exposure, or concentration, call get_portfolio to pull live values, gain/loss, lot-level detail, and sector breakdown -- don't make quantitative claims off the light snapshot alone.
 
-TAX-AWARE SELLING: get_portfolio returns per-position lot detail (buy date, cost basis, days held, short vs long term) and ST/LT realized + unrealized splits. When proposing a sell or trim, look at the lots: long-term gains are usually taxed at lower rates than short-term. If one method materially differs from another, call it out in the rationale and set lotMethod on the change. FIFO is the default for stock/etf, average_cost for mutual_fund (and is legally required for mutual_fund). If a short-term lot is within weeks of crossing one year, mention it rather than proposing an immediate sale.
+TAX-AWARE SELLING: get_portfolio returns per-position lot detail (buy date, cost basis, days held, short vs long term) and ST/LT realized + unrealized splits. When proposing a sell or trim, look at the lots and pick a lotMethod deliberately:
+- FIFO: default for stock/etf, often surfaces long-term gains (lower tax rate)
+- LIFO: keeps older long-term lots intact, hits newer (usually short-term) lots first
+- HIFO: minimizes realized gain by selling highest-cost-basis lots first -- the default move for tax-loss harvesting or when the user wants to defer taxes
+- average_cost: required for mutual_fund; rarely the right call for stocks/ETFs with dispersed cost bases
+When one method produces materially different tax outcomes than another (e.g. HIFO realizes a loss while FIFO realizes a gain), say so in the rationale and set lotMethod explicitly. If a short-term lot is within weeks of crossing one year, mention it rather than proposing an immediate sale.
 
 RESEARCH COPILOT MODE (when user is exploring a thesis, asking "what do you think about X," or working through an analysis): Socratic, exploratory, suggest angles they haven't considered, play devil's advocate on their thesis, surface counterfactuals and second-order effects.
 
@@ -374,8 +426,8 @@ const TOOLS = [
               reason: { type: "string", description: "One-sentence reason for this specific change." },
               lotMethod: {
                 type: "string",
-                enum: ["fifo", "average_cost"],
-                description: "Only used on sell/trim actions. Controls which lots get consumed: 'fifo' sells oldest shares first (default for stock/etf, typically triggers more long-term gains), 'average_cost' uses the weighted-average basis (default and legally required for mutual_fund). Specify this when the tax implications differ materially between methods.",
+                enum: ["fifo", "lifo", "hifo", "average_cost"],
+                description: "Only used on sell/trim actions. 'fifo' sells oldest shares first (default for stock/etf, often favors long-term gains). 'lifo' sells newest first (keeps older long-term lots intact). 'hifo' sells highest-cost-basis first (minimizes realized gain -- the default for tax-loss harvesting). 'average_cost' uses the weighted-average basis (default and legally required for mutual_fund). Specify explicitly when the tax outcome differs materially between methods -- call it out in the rationale when you do.",
               },
             },
             required: ["action", "symbol", "shares", "reason"],
@@ -689,13 +741,14 @@ async function executeTool(
         const normalized = rawChanges
           .map((c: any) => {
             const lm = c.lotMethod ? String(c.lotMethod).toLowerCase() : null
+            const validLotMethods = new Set(['fifo', 'lifo', 'hifo', 'average_cost'])
             return {
               action: String(c.action || '').toLowerCase(),
               symbol: String(c.symbol || '').toUpperCase(),
               assetType: String(c.assetType || c.asset_type || 'stock'),
               shares: Number(c.shares) || 0,
               reason: String(c.reason || '').slice(0, 300),
-              lotMethod: lm === 'fifo' || lm === 'average_cost' ? lm : null,
+              lotMethod: lm && validLotMethods.has(lm) ? lm : null,
             }
           })
           .filter((c: any) =>

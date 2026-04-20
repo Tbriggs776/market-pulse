@@ -42,7 +42,7 @@ function defaultLotMethod(assetType) {
 function resolveLotMethod(txn, assetType) {
   if (!txn.lot_method) return 'average_cost'
   const m = String(txn.lot_method).toLowerCase()
-  if (m === 'fifo' || m === 'average_cost') return m
+  if (m === 'fifo' || m === 'lifo' || m === 'hifo' || m === 'average_cost') return m
   // Unknown method -- fall through to the asset-type default rather than fail.
   return defaultLotMethod(assetType)
 }
@@ -63,6 +63,54 @@ function consumeFifo(openLots, shares, sellPrice, sellDate) {
     lot.shares -= take
     remaining -= take
     if (lot.shares <= CLOSED_EPSILON) openLots.shift()
+  }
+  return { realizedShort, realizedLong }
+}
+
+// LIFO: consume newest lots first. Tends to hit short-term gains on recently
+// bought shares but leaves older (often long-term) lots untouched.
+function consumeLifo(openLots, shares, sellPrice, sellDate) {
+  let remaining = shares
+  let realizedShort = 0
+  let realizedLong = 0
+  while (remaining > CLOSED_EPSILON && openLots.length > 0) {
+    const lot = openLots[openLots.length - 1]
+    const take = Math.min(lot.shares, remaining)
+    const gain = (sellPrice - lot.costBasis) * take
+    const held = daysBetween(lot.buyDate, sellDate)
+    if (held > LONG_TERM_DAYS) realizedLong += gain
+    else realizedShort += gain
+    lot.shares -= take
+    remaining -= take
+    if (lot.shares <= CLOSED_EPSILON) openLots.pop()
+  }
+  return { realizedShort, realizedLong }
+}
+
+// HIFO: consume highest-cost-basis lots first. Minimizes realized gain
+// (or maximizes realized loss), the default tax-loss-harvesting strategy.
+// Iterate over a sort reference; mutations on each lot object reflect in
+// the original openLots array since we're sharing references.
+function consumeHifo(openLots, shares, sellPrice, sellDate) {
+  let remaining = shares
+  let realizedShort = 0
+  let realizedLong = 0
+  const sorted = [...openLots].sort((a, b) => b.costBasis - a.costBasis)
+  for (const lot of sorted) {
+    if (remaining <= CLOSED_EPSILON) break
+    if (lot.shares <= CLOSED_EPSILON) continue
+    const take = Math.min(lot.shares, remaining)
+    const gain = (sellPrice - lot.costBasis) * take
+    const held = daysBetween(lot.buyDate, sellDate)
+    if (held > LONG_TERM_DAYS) realizedLong += gain
+    else realizedShort += gain
+    lot.shares -= take
+    remaining -= take
+  }
+  // Drop exhausted lots from the original array in place; preserves the
+  // remaining lots' chronological order.
+  for (let i = openLots.length - 1; i >= 0; i--) {
+    if (openLots[i].shares <= CLOSED_EPSILON) openLots.splice(i, 1)
   }
   return { realizedShort, realizedLong }
 }
@@ -156,9 +204,16 @@ export function computePositions(transactions) {
         if (sellShares <= 0) continue
         const [symbol, assetType] = key.split(':')
         const method = resolveLotMethod(t, assetType)
-        const { realizedShort: rs, realizedLong: rl } = method === 'fifo'
-          ? consumeFifo(openLots, sellShares, sellPrice, t.occurred_at)
-          : consumeAverageCost(openLots, sellShares, sellPrice, t.occurred_at)
+        let rs = 0, rl = 0
+        if (method === 'fifo') {
+          ;({ realizedShort: rs, realizedLong: rl } = consumeFifo(openLots, sellShares, sellPrice, t.occurred_at))
+        } else if (method === 'lifo') {
+          ;({ realizedShort: rs, realizedLong: rl } = consumeLifo(openLots, sellShares, sellPrice, t.occurred_at))
+        } else if (method === 'hifo') {
+          ;({ realizedShort: rs, realizedLong: rl } = consumeHifo(openLots, sellShares, sellPrice, t.occurred_at))
+        } else {
+          ;({ realizedShort: rs, realizedLong: rl } = consumeAverageCost(openLots, sellShares, sellPrice, t.occurred_at))
+        }
         realizedShort += rs
         realizedLong += rl
       } else if (t.transaction_type === 'dividend') {
