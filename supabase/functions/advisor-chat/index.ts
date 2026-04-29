@@ -376,6 +376,8 @@ When one method produces materially different tax outcomes than another (e.g. HI
 
 RETURN PROJECTIONS: get_portfolio also returns a `projections` block with 10th/50th/90th percentile outcomes at 1, 5, 10, 20, and 30 years, derived from value-weighted asset-class historical averages (stocks 10/18, ETFs 9/15, mutual funds 8/12 mu/sigma annualized). When the user asks "am I on track" or "what's this worth in 10 years" kinds of questions, cite these percentiles. ALWAYS frame them as illustrative ranges, not forecasts -- "the median path gets you to X, with a 10-to-90 range of Y to Z" is the right pattern. Never say "you will have" about a projected value. The model ignores contributions, taxes, sequence-of-returns risk, and correlation; surface those caveats when the user is making a consequential decision based on the numbers.
 
+DIVIDEND ANALYSIS: when the user asks about income, yield, dividend growth, or compares dividend stocks, call get_dividend_history(symbol) for the relevant ticker(s). The response gives latest amount + ex-date, frequency (annual/semi/quarterly/monthly), annualized amount, 5-year CAGR of the cash payment, and the last 20 events. Compute yields against current price (yield on value) or cost basis (yield on cost) when the user owns the position. Frame "forward annual" as based on the latest payment annualized, not a guarantee -- a special dividend or recent cut can skew this. If the latest payment is older than expected (e.g. 6+ months for a quarterly payer), call out that the company may have skipped or stopped. The endpoint covers cash dividends only; capital-gains distributions for mutual funds are not represented.
+
 RESEARCH COPILOT MODE (when user is exploring a thesis, asking "what do you think about X," or working through an analysis): Socratic, exploratory, suggest angles they haven't considered, play devil's advocate on their thesis, surface counterfactuals and second-order effects.
 
 Tool usage guidance:
@@ -451,6 +453,17 @@ const TOOLS = [
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
+    name: "get_dividend_history",
+    description: "Fetch dividend history and computed metrics for a single ticker -- latest cash amount and ex-date, payment frequency, annualized amount, dividend yield (when combined with the price), 5-year compound growth rate, payment count over the last 5 years, and up to 20 most recent events. Use when the user asks about income, yield, dividend growth, payment consistency, or compares dividend stocks. Doesn't include capital gains distributions for mutual funds.",
+    input_schema: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "Single ticker symbol, e.g. 'KO'" },
+      },
+      required: ["symbol"],
+    },
+  },
+  {
     name: "propose_trade",
     description: "Propose a concrete set of portfolio changes for the user to simulate and apply. Use this only when you're making a specific, actionable recommendation after analyzing their portfolio -- e.g. 'trim NVDA, add VXUS for international diversification'. Call get_portfolio first so you know what they actually hold. The user will see an inline proposal card with a Simulate button to preview asset-class and concentration changes, and an Apply button for trim/sell actions. Do NOT use this for general ideas, musings, or exploratory suggestions -- only for concrete trades with specific share counts.",
     input_schema: {
@@ -511,6 +524,14 @@ async function executeTool(
         const symbols = Array.isArray(toolInput?.symbols) ? toolInput.symbols : []
         if (symbols.length === 0) return JSON.stringify({ error: "symbols array required" })
         return JSON.stringify(await callInternalFunction("stock-quote", { symbols: symbols.slice(0, 10) }))
+      }
+      case "get_dividend_history": {
+        const symbol = String(toolInput?.symbol || "").trim()
+        if (!symbol) return JSON.stringify({ error: "symbol required" })
+        const result = await callInternalFunction("dividend-history", { symbols: [symbol] })
+        const summary = result?.dividends?.[symbol.toUpperCase()] || null
+        if (!summary) return JSON.stringify({ symbol, hasDividends: false, message: "no dividend data available" })
+        return JSON.stringify(summary)
       }
       case "research_ticker": {
         const symbol = String(toolInput?.symbol || "").trim()
@@ -1233,6 +1254,12 @@ function summarizeToolResult(toolName: string, result: any): string {
     case "propose_trade": {
       const n = result.changeCount ?? 0
       return n === 1 ? "1 proposed change" : `${n} proposed changes`
+    }
+    case "get_dividend_history": {
+      if (!result.hasDividends) return `${result.symbol || "?"} pays no dividend`
+      const ann = result.annualizedAmount
+      const f = result.frequencyLabel || "?"
+      return `${result.symbol} ${f} · annualized $${(ann ?? 0).toFixed(2)}`
     }
     default: return "ok"
   }

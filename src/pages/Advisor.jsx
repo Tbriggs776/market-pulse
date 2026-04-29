@@ -36,12 +36,14 @@ const TOOL_LABELS = {
   search_news: 'News search',
   get_user_watchlist: 'Watchlist refresh',
   get_portfolio: 'Portfolio snapshot',
+  get_dividend_history: 'Dividend history',
 }
 
 function toolInputSummary(name, input) {
   if (!input) return ''
   if (name === 'get_quote') return (input.symbols || []).join(', ')
   if (name === 'research_ticker') return input.symbol || ''
+  if (name === 'get_dividend_history') return input.symbol || ''
   if (name === 'search_news') return input.category || ''
   return ''
 }

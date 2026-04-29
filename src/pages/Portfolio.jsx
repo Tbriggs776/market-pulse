@@ -5,11 +5,12 @@ import {
   Plus, Trash2, TrendingUp, TrendingDown,
   PieChart, RefreshCw, ChevronRight, ChevronDown, Receipt,
 } from 'lucide-react'
-import { stocksService, metadataService } from '../lib/api'
+import { stocksService, metadataService, dividendsService } from '../lib/api'
 import { portfolioApi } from '../lib/supabase'
 import AllocationBreakdown from '../components/portfolio/AllocationBreakdown'
 import AddPositionModal from '../components/portfolio/AddPositionModal'
 import ProjectionsPanel from '../components/portfolio/ProjectionsPanel'
+import IncomePanel from '../components/portfolio/IncomePanel'
 
 const ASSET_TYPE_LABEL = {
   stock: 'Stock',
@@ -64,6 +65,17 @@ export default function Portfolio() {
   const { data: metadata = {} } = useQuery({
     queryKey: ['asset-metadata', uniqueSymbols.join(',')],
     queryFn: () => metadataService.getMetadata(uniqueSymbols),
+    enabled: uniqueSymbols.length > 0,
+    staleTime: 24 * 60 * 60 * 1000,
+    gcTime: 7 * 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  })
+
+  // Dividend history. Quarterly+ payouts mean a 24h cache catches every
+  // possible new event with massive headroom; refresh on demand otherwise.
+  const { data: dividends = {} } = useQuery({
+    queryKey: ['dividend-history', uniqueSymbols.join(',')],
+    queryFn: () => dividendsService.getDividendHistory(uniqueSymbols),
     enabled: uniqueSymbols.length > 0,
     staleTime: 24 * 60 * 60 * 1000,
     gcTime: 7 * 24 * 60 * 60 * 1000,
@@ -249,6 +261,11 @@ export default function Portfolio() {
       {/* Projections */}
       {positions.length > 0 && (
         <ProjectionsPanel positions={positions} quotes={quotes} />
+      )}
+
+      {/* Income (only renders when at least one held position pays a dividend) */}
+      {positions.length > 0 && (
+        <IncomePanel positions={positions} quotes={quotes} dividends={dividends} />
       )}
 
       <AddPositionModal
