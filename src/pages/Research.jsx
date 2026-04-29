@@ -4,11 +4,13 @@ import {
   Search, TrendingUp, TrendingDown, RefreshCw, AlertTriangle,
   Sparkles, FileText, Table2, BarChart3, Plus, Trash2,
   ArrowRight, MessageSquare, X, Check, Activity, DollarSign,
-  Percent, Globe, PieChart,
+  Percent, Globe, PieChart, ChevronRight, ChevronDown,
 } from 'lucide-react'
 import { researchService, stocksService, marketService } from '../lib/api'
 import { benchApi } from '../lib/supabase'
 import AddPositionModal from '../components/portfolio/AddPositionModal'
+import PriceChart from '../components/research/PriceChart'
+import BenchDossier from '../components/research/BenchDossier'
 
 import { useAuth } from '../contexts/AuthContext'
 import { Link } from 'react-router-dom'
@@ -444,6 +446,16 @@ function ResearchBench() {
   const [editingNotes, setEditingNotes] = useState(null)
   const [notesText, setNotesText] = useState('')
   const [promotingItem, setPromotingItem] = useState(null)
+  const [expandedIds, setExpandedIds] = useState(() => new Set())
+
+  function toggleExpanded(id) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const { data: bench = [], isLoading } = useQuery({
     queryKey: ['research-bench'],
@@ -592,17 +604,27 @@ function ResearchBench() {
             const quote = quotes[item.symbol] || null
             const statusCfg = STATUS_CONFIG[item.status] || STATUS_CONFIG.evaluating
             const isEditingThis = editingNotes === item.id
+            const isExpanded = expandedIds.has(item.id)
 
             return (
-              <div key={item.id} className="card hover:border-gold-dim transition-colors">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-mono font-bold text-ivory">{item.symbol}</span>
-                      <span className={statusCfg.color}>{statusCfg.label}</span>
+              <div key={item.id} className="card hover:border-gold-dim transition-colors p-0">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 sm:p-5">
+                  <button
+                    onClick={() => toggleExpanded(item.id)}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                    title={isExpanded ? 'Collapse dossier' : 'Expand dossier'}
+                  >
+                    <span className="text-text-muted shrink-0">
+                      {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-mono font-bold text-ivory">{item.symbol}</span>
+                        <span className={statusCfg.color}>{statusCfg.label}</span>
+                      </div>
+                      <div className="text-sm text-text-secondary truncate">{item.name}</div>
                     </div>
-                    <div className="text-sm text-text-secondary truncate">{item.name}</div>
-                  </div>
+                  </button>
                   <div className="text-right sm:w-32">
                     {quote ? (
                       <div>
@@ -624,7 +646,7 @@ function ResearchBench() {
                   </div>
                 </div>
                 {isEditingThis && (
-                  <div className="mt-3 pt-3 border-t border-border">
+                  <div className="px-4 sm:px-5 pb-4 pt-3 border-t border-border">
                     <textarea value={notesText} onChange={(e) => setNotesText(e.target.value)} placeholder="Add research notes..." className="input w-full h-20 text-sm resize-none" />
                     <div className="flex justify-end gap-2 mt-2">
                       <button onClick={() => setEditingNotes(null)} className="btn-ghost text-xs">Cancel</button>
@@ -633,9 +655,16 @@ function ResearchBench() {
                   </div>
                 )}
                 {!isEditingThis && item.notes && (
-                  <div className="mt-3 pt-3 border-t border-border">
+                  <div className="px-4 sm:px-5 pb-4 pt-3 border-t border-border">
                     <p className="text-xs text-text-secondary italic">{item.notes}</p>
                   </div>
+                )}
+                {isExpanded && (
+                  <BenchDossier
+                    symbol={item.symbol}
+                    name={item.name}
+                    sector={item.sector}
+                  />
                 )}
               </div>
             )
@@ -646,54 +675,3 @@ function ResearchBench() {
   )
 }
 
-// ════════════════════════════════════════════════════
-// Simple SVG Price Chart
-// ════════════════════════════════════════════════════
-
-function PriceChart({ data }) {
-  if (!data || data.length < 2) return null
-
-  const prices = data.map((d) => d.close)
-  const min = Math.min(...prices)
-  const max = Math.max(...prices)
-  const range = max - min || 1
-
-  const width = 700
-  const height = 200
-  const padding = 30
-  const chartW = width - padding * 2
-  const chartH = height - padding * 2
-
-  const points = data.map((d, i) => {
-    const x = padding + (i / (data.length - 1)) * chartW
-    const y = padding + chartH - ((d.close - min) / range) * chartH
-    return `${x},${y}`
-  }).join(' ')
-
-  const isUp = prices[prices.length - 1] >= prices[0]
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
-      {[0, 0.25, 0.5, 0.75, 1].map((pct) => {
-        const y = padding + chartH - pct * chartH
-        const price = min + pct * range
-        return (
-          <g key={pct}>
-            <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="var(--color-border, #2A2A33)" strokeWidth="1" />
-            <text x={padding - 5} y={y + 3} textAnchor="end" fontSize="9" fill="var(--color-text-muted, #5A5E66)">${price.toFixed(0)}</text>
-          </g>
-        )
-      })}
-      <polyline points={points} fill="none" stroke={isUp ? '#5FA572' : '#B22234'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      {data.filter((_, i) => i === 0 || i === data.length - 1 || i === Math.floor(data.length / 2)).map((d, idx) => {
-        const i = idx === 0 ? 0 : idx === 1 ? Math.floor(data.length / 2) : data.length - 1
-        const x = padding + (i / (data.length - 1)) * chartW
-        return (
-          <text key={d.date} x={x} y={height - 5} textAnchor="middle" fontSize="9" fill="var(--color-text-muted, #5A5E66)">
-            {new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-          </text>
-        )
-      })}
-    </svg>
-  )
-}
