@@ -103,17 +103,26 @@ async function fetchFromNewsdata(
   return data.results as Array<Record<string, unknown>>
 }
 
+// Category filters are intentionally narrow: politics + domestic policy +
+// world (geopolitics / supply chain / commodity news) + business. We exclude
+// newsdata's `top` catch-all and entertainment/sports/lifestyle/etc. on
+// purpose -- this surface is for investing + policy signal, not headlines.
 async function fetchLocal(apiKey: string, state: string) {
   return await fetchFromNewsdata(apiKey, 'latest', {
-    q: state, country: 'us', category: 'politics,business', language: 'en', size: '10',
+    q: state, country: 'us',
+    category: 'politics,business,domestic',
+    language: 'en', size: '10',
   })
 }
 async function fetchNational(apiKey: string) {
   return await fetchFromNewsdata(apiKey, 'latest', {
-    country: 'us', category: 'politics,top', language: 'en', size: '10',
+    country: 'us',
+    category: 'politics,domestic,world',
+    language: 'en', size: '10',
   })
 }
 async function fetchBusiness(apiKey: string) {
+  // newsdata's /market endpoint returns financial-market news; already curated.
   return await fetchFromNewsdata(apiKey, 'market', {
     language: 'en', size: '10',
   })
