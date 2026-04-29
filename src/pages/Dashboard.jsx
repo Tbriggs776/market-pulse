@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { RefreshCw, Newspaper, MapPin, Flag, Briefcase, Globe } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { RefreshCw, Newspaper, MapPin, Flag, Briefcase, Globe, Lightbulb, ArrowRight } from 'lucide-react'
 import { newsService } from '../lib/api'
 import NewsCard from '../components/news/NewsCard'
 import NewsCardSkeleton from '../components/news/NewsCardSkeleton'
 import AIBriefing from '../components/dashboard/AIBriefing'
 import { useAuth } from '../contexts/AuthContext'
 import { useAnonymousStore } from '../contexts/AnonymousStoreContext'
+import { investmentRulesApi } from '../lib/supabase'
 
 const TABS = [
   { id: 'all', label: 'All', icon: Globe },
@@ -47,6 +49,15 @@ export default function Dashboard() {
       : news[activeTab] || []
     : []
 
+  // Investment Rules CTA: only authed, only when rules aren't completed.
+  const { data: rules } = useQuery({
+    queryKey: ['investment-rules'],
+    queryFn: investmentRulesApi.get,
+    enabled: !isAnonymous,
+    staleTime: 60 * 1000,
+  })
+  const showRulesCta = !isAnonymous && rules && rules.onboarding_status !== 'completed'
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
@@ -75,6 +86,26 @@ export default function Dashboard() {
           Refresh
         </button>
       </div>
+
+      {showRulesCta && (
+        <Link
+          to="/profile"
+          className="card-elevated border-gold/30 bg-gold/5 flex items-start sm:items-center gap-3 sm:gap-4 hover:border-gold transition-colors"
+        >
+          <div className="p-2 rounded bg-gold/10 shrink-0">
+            <Lightbulb className="w-5 h-5 text-gold" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-ivory">
+              Set your Investment Rules
+            </div>
+            <div className="text-xs text-text-secondary mt-0.5">
+              About a minute. Unlocks AI-curated suggestions and gives the advisor real context for your goals.
+            </div>
+          </div>
+          <ArrowRight className="w-4 h-4 text-gold shrink-0" />
+        </Link>
+      )}
 
       <AIBriefing articles={news?.all || []} state={state} />
 

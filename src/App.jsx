@@ -6,6 +6,8 @@ import Dashboard from './pages/Dashboard'
 import Watchlist from './pages/Watchlist'
 import Portfolio from './pages/Portfolio'
 import Transactions from './pages/Transactions'
+import Profile from './pages/Profile'
+import Suggestions from './pages/Suggestions'
 import Research from './pages/Research'
 import Government from './pages/Government'
 import Advisor from './pages/Advisor'
@@ -57,6 +59,8 @@ function AppRoutes() {
         <Route path="/watchlist" element={<Watchlist />} />
         <Route path="/portfolio" element={<Portfolio />} />
         <Route path="/transactions" element={<Transactions />} />
+        <Route path="/profile" element={<Profile />} />
+        <Route path="/suggestions" element={<Suggestions />} />
       </Route>
     </Routes>
   )

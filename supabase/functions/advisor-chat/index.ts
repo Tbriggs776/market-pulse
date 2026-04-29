@@ -378,6 +378,8 @@ RETURN PROJECTIONS: get_portfolio also returns a `projections` block with 10th/5
 
 DIVIDEND ANALYSIS: when the user asks about income, yield, dividend growth, or compares dividend stocks, call get_dividend_history(symbol) for the relevant ticker(s). The response gives latest amount + ex-date, frequency (annual/semi/quarterly/monthly), annualized amount, 5-year CAGR of the cash payment, and the last 20 events. Compute yields against current price (yield on value) or cost basis (yield on cost) when the user owns the position. Frame "forward annual" as based on the latest payment annualized, not a guarantee -- a special dividend or recent cut can skew this. If the latest payment is older than expected (e.g. 6+ months for a quarterly payer), call out that the company may have skipped or stopped. The endpoint covers cash dividends only; capital-gains distributions for mutual funds are not represented.
 
+INVESTMENT RULES: when the context block includes a user's stated Investment Rules (goal, time horizon, risk tolerance, income need, experience, account type, capital range, exclusions), treat them as policy. Don't suggest aggressive plays for a conservative-tagged user. Don't pitch pure-growth picks when income_need is "primary." Don't recommend anything in their exclusions list. When the user asks something that contradicts their own rules ("can I lever up NVDA?" with risk_tolerance=conservative), push back honestly: "you set yourself as conservative -- want to talk through whether that's still right, or rule this one out?" When you propose trades via propose_trade, anchor the rationale to which rule the trade serves.
+
 RESEARCH COPILOT MODE (when user is exploring a thesis, asking "what do you think about X," or working through an analysis): Socratic, exploratory, suggest angles they haven't considered, play devil's advocate on their thesis, surface counterfactuals and second-order effects.
 
 Tool usage guidance:
@@ -911,6 +913,29 @@ async function buildPortfolioSnapshot(
   }
 
   // Authenticated path
+  // Investment Rules surface first -- they're policy that shapes every other answer.
+  try {
+    const { data: rules } = await supabaseAdmin
+      .from("investment_rules")
+      .select("goal, time_horizon, risk_tolerance, income_need, experience, account_type, capital_range, exclusions, onboarding_status")
+      .eq("user_id", userId)
+      .maybeSingle()
+    if (rules && rules.onboarding_status === 'completed') {
+      parts.push("")
+      parts.push("INVESTMENT RULES (user-stated policy -- respect these):")
+      if (rules.goal) parts.push(`- Goal: ${rules.goal}`)
+      if (rules.time_horizon) parts.push(`- Time horizon: ${rules.time_horizon}`)
+      if (rules.risk_tolerance) parts.push(`- Risk tolerance: ${rules.risk_tolerance}`)
+      if (rules.income_need) parts.push(`- Income need: ${rules.income_need}`)
+      if (rules.experience) parts.push(`- Experience level: ${rules.experience}`)
+      if (rules.account_type) parts.push(`- Account type: ${rules.account_type}`)
+      if (rules.capital_range) parts.push(`- Initial capital range: ${rules.capital_range}`)
+      if (rules.exclusions && rules.exclusions.trim()) {
+        parts.push(`- Things to avoid: ${rules.exclusions.slice(0, 400)}`)
+      }
+    }
+  } catch (_) { /* silent */ }
+
   try {
     const { data: watchlist } = await supabaseAdmin
       .from("watchlist")

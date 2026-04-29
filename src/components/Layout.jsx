@@ -2,17 +2,19 @@ import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Star, Search, Landmark, Bot, PieChart, Receipt,
-  LogOut, LogIn, Menu, X,
+  LogOut, LogIn, Menu, X, Lightbulb,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import GuestRibbon from './GuestRibbon'
 import StatePicker from './StatePicker'
+import OnboardingGate from './onboarding/OnboardingGate'
 
 const NAV_ITEMS_AUTHED = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/portfolio', label: 'Portfolio', icon: PieChart },
   { to: '/transactions', label: 'Transactions', icon: Receipt },
   { to: '/watchlist', label: 'Watchlist', icon: Star },
+  { to: '/suggestions', label: 'Ideas', icon: Lightbulb },
   { to: '/research', label: 'Research', icon: Search },
   { to: '/government', label: 'Government', icon: Landmark },
   { to: '/advisor', label: 'Advisor', icon: Bot },
@@ -100,9 +102,13 @@ export default function Layout() {
             ) : (
               displayName && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-text-muted hidden lg:inline">
+                  <Link
+                    to="/profile"
+                    className="text-xs text-text-muted hover:text-gold transition-colors hidden lg:inline"
+                    title="Profile + Investment Rules"
+                  >
                     {displayName}
-                  </span>
+                  </Link>
                   <button
                     onClick={handleSignOut}
                     className="btn-ghost p-1.5"
@@ -159,8 +165,9 @@ export default function Layout() {
       </header>
 
       {isAnonymous && <GuestRibbon />}
+      {!isAnonymous && <OnboardingGate />}
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-8">
+      <main className="flex-1 max-w-screen-2xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
         <Outlet />
       </main>
 

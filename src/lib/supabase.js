@@ -253,6 +253,91 @@ export const transactionsApi = {
   },
 }
 
+// ---- Investment Rules ----
+// User's stated investment policy: goals, horizon, risk, etc. Drives both
+// the AI suggestions surface and the advisor's system-prompt context.
+
+export const investmentRulesApi = {
+  // Returns the row or null. Null = first-time user (no row yet).
+  async get() {
+    const userId = await getUserId()
+    const { data, error } = await supabase
+      .from('investment_rules')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (error) throw error
+    return data || null
+  },
+
+  // Upsert: first call inserts, subsequent calls update.
+  async save(rules) {
+    const userId = await getUserId()
+    const payload = {
+      user_id: userId,
+      goal: rules.goal || null,
+      time_horizon: rules.timeHorizon || null,
+      risk_tolerance: rules.riskTolerance || null,
+      income_need: rules.incomeNeed || null,
+      experience: rules.experience || null,
+      account_type: rules.accountType || null,
+      capital_range: rules.capitalRange || null,
+      exclusions: rules.exclusions || null,
+      onboarding_status: 'completed',
+    }
+    const { data, error } = await supabase
+      .from('investment_rules')
+      .upsert(payload, { onConflict: 'user_id' })
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+
+  // Marks a "skip for now" -- creates an empty row so the popup doesn't
+  // re-fire. User can still complete via /profile later.
+  async dismiss() {
+    const userId = await getUserId()
+    const { data, error } = await supabase
+      .from('investment_rules')
+      .upsert(
+        { user_id: userId, onboarding_status: 'dismissed' },
+        { onConflict: 'user_id' }
+      )
+      .select()
+      .single()
+    if (error) throw error
+    return data
+  },
+}
+
+// ---- Investment Suggestions ----
+// Read-only from the client; writes happen in the generate-suggestions
+// edge function so the AI prompt + parsing logic stays server-side.
+
+export const investmentSuggestionsApi = {
+  async list() {
+    const userId = await getUserId()
+    const { data, error } = await supabase
+      .from('investment_suggestions')
+      .select('*')
+      .eq('user_id', userId)
+      .order('generated_at', { ascending: false })
+    if (error) throw error
+    return data || []
+  },
+
+  async remove(id) {
+    const userId = await getUserId()
+    const { error } = await supabase
+      .from('investment_suggestions')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId)
+    if (error) throw error
+  },
+}
+
 // ---- Portfolio (derived from transactions) ----
 // list()    fetches all transactions and computes current positions.
 // add()     writes a BUY transaction (preserves the Pass 11 UX).
