@@ -63,31 +63,35 @@ export default function SuggestionCard({
             <button
               onClick={onAddToBench}
               disabled={busy}
-              className="btn-secondary text-xs flex-1 sm:flex-none justify-center"
+              className="btn-secondary text-xs flex-1 sm:flex-none justify-center whitespace-nowrap"
+              title="Add to Research Bench"
             >
               <ArrowRight className="w-3.5 h-3.5" />
-              Add to Bench
+              <span className="hidden sm:inline">Add to Bench</span>
+              <span className="sm:hidden">Bench</span>
             </button>
           )}
           {onAddToPortfolio && (
             <button
               onClick={onAddToPortfolio}
               disabled={busy}
-              className="btn-primary text-xs flex-1 sm:flex-none justify-center"
+              className="btn-primary text-xs flex-1 sm:flex-none justify-center whitespace-nowrap"
+              title="Add to Portfolio"
             >
               <Plus className="w-3.5 h-3.5" />
-              Add Position
+              <span className="hidden sm:inline">Add Position</span>
+              <span className="sm:hidden">Portfolio</span>
             </button>
           )}
           {onDismiss && (
             <button
               onClick={onDismiss}
               disabled={busy}
-              className="btn-ghost text-xs text-text-muted hover:text-crimson sm:flex-none justify-center"
+              className="btn-ghost text-xs text-text-muted hover:text-crimson sm:flex-none justify-center whitespace-nowrap"
               title="Dismiss this suggestion"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Dismiss
+              <span className="hidden sm:inline">Dismiss</span>
             </button>
           )}
         </div>

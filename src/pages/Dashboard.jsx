@@ -110,13 +110,13 @@ export default function Dashboard() {
       <AIBriefing articles={news?.all || []} state={state} />
 
       <section>
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
           <h2 className="flex items-center gap-2 text-xl font-semibold text-ivory">
             <Newspaper className="w-5 h-5 text-gold" aria-hidden="true" />
             Latest News
           </h2>
           <div
-            className="flex items-center gap-1 p-1 bg-surface rounded-md border border-border"
+            className="flex items-center gap-1 p-1 bg-surface rounded-md border border-border overflow-x-auto max-w-full"
             role="tablist"
             aria-label="News categories"
           >
@@ -126,7 +126,7 @@ export default function Dashboard() {
                 role="tab"
                 aria-selected={activeTab === tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                   activeTab === tab.id
                     ? 'bg-gold/15 text-gold-bright'
                     : 'text-text-secondary hover:text-ivory'

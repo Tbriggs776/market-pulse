@@ -64,7 +64,7 @@ export default function Research() {
           </p>
         </div>
         <div
-          className="flex items-center gap-1 p-1 bg-surface rounded-md border border-border"
+          className="flex items-center gap-1 p-1 bg-surface rounded-md border border-border overflow-x-auto max-w-full"
           role="tablist"
         >
           {RESEARCH_TABS.map((tab) => (
@@ -73,7 +73,7 @@ export default function Research() {
               role="tab"
               aria-selected={activeTab === tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === tab.id
                   ? 'bg-gold/15 text-gold-bright'
                   : 'text-text-secondary hover:text-ivory'

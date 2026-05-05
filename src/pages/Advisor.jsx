@@ -327,6 +327,9 @@ function AdvisorAuthenticated() {
   const [proposals, setProposals] = useState([]) // { id, rationale, changes }
   const [applyState, setApplyState] = useState({}) // { [proposalId]: { applying, error } }
   const [error, setError] = useState(null)
+  // Mobile-only: sidebar is hidden by default and opens as a fullscreen
+  // overlay. Auto-closes when the user picks a conversation.
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const scrollRef = useRef(null)
   const inputRef = useRef(null)
 
@@ -441,6 +444,7 @@ function AdvisorAuthenticated() {
     setError(null)
     setStreamBuffer('')
     setStreamToolEvents([])
+    setSidebarOpen(false)
     inputRef.current?.focus()
   }
 
@@ -538,15 +542,36 @@ function AdvisorAuthenticated() {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4 h-[calc(100vh-180px)] min-h-[500px]">
-      <aside className="card-elevated flex flex-col overflow-hidden">
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 bg-canvas/70 z-40 md:hidden"
+        />
+      )}
+      <aside
+        className={`card-elevated flex flex-col overflow-hidden md:relative md:inset-auto md:z-auto ${
+          sidebarOpen
+            ? 'fixed inset-x-3 inset-y-3 z-50'
+            : 'hidden md:flex'
+        }`}
+      >
         <div className="flex items-center justify-between p-3 border-b border-border">
           <h2 className="text-sm font-medium text-ivory flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-gold" />
             Conversations
           </h2>
-          <button onClick={handleNewConversation} className="btn-ghost p-1.5" title="New conversation">
-            <Plus className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={handleNewConversation} className="btn-ghost p-1.5" title="New conversation">
+              <Plus className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="btn-ghost p-1.5 md:hidden"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {convsQ.isLoading && <div className="flex items-center justify-center p-6"><Loader2 className="w-4 h-4 text-gold animate-spin" /></div>}
@@ -559,7 +584,7 @@ function AdvisorAuthenticated() {
             return (
               <button
                 key={c.id}
-                onClick={() => setActiveId(c.id)}
+                onClick={() => { setActiveId(c.id); setSidebarOpen(false) }}
                 className={`w-full text-left px-3 py-2.5 border-b border-border/50 transition-colors group ${isActive ? 'bg-gold/10' : 'hover:bg-surface'}`}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -567,7 +592,7 @@ function AdvisorAuthenticated() {
                     <div className={`text-xs truncate ${isActive ? 'text-gold' : 'text-ivory'}`}>{c.title}</div>
                     <div className="text-[10px] text-text-muted mt-0.5">{formatTime(c.updated_at)}</div>
                   </div>
-                  <button onClick={(e) => handleDelete(c.id, e)} className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-crimson transition-opacity p-1" title="Delete">
+                  <button onClick={(e) => handleDelete(c.id, e)} className="opacity-60 md:opacity-0 group-hover:opacity-100 text-text-muted hover:text-crimson transition-opacity p-1" title="Delete">
                     <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
@@ -578,8 +603,15 @@ function AdvisorAuthenticated() {
       </aside>
 
       <section className="card-elevated flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between p-3 border-b border-border">
+        <div className="flex items-center justify-between p-3 border-b border-border gap-2">
           <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="btn-ghost p-1 md:hidden"
+              title="Conversations"
+            >
+              <MessageSquare className="w-4 h-4" />
+            </button>
             <Bot className="w-4 h-4 text-gold shrink-0" />
             <h1 className="text-sm font-medium text-ivory truncate">
               {activeConvQ.data?.conversation?.title || 'New conversation'}
