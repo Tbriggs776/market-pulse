@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { Analytics } from '@vercel/analytics/react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { AnonymousStoreProvider } from './contexts/AnonymousStoreContext'
 import Layout from './components/Layout'
@@ -71,6 +72,7 @@ function App() {
     <AuthProvider>
       <AnonymousStoreProvider>
         <AppRoutes />
+        <Analytics />
       </AnonymousStoreProvider>
     </AuthProvider>
   )
