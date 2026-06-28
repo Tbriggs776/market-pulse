@@ -27,3 +27,7 @@ npm-debug.log*
 .cache/
 supabase/.temp
 supabase/.branches
+
+# Claude Code local/session files (machine-specific, may contain cross-project tokens)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
