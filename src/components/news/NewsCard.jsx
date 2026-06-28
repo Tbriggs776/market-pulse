@@ -1,4 +1,4 @@
-import { ExternalLink } from 'lucide-react'
+import { ExternalLink, Sparkles } from 'lucide-react'
 
 /**
  * NewsCard — one article in the Dashboard news grid.
@@ -49,12 +49,21 @@ export default function NewsCard({ article }) {
   const categoryClass = CATEGORY_STYLES[article.category] || 'badge-neutral'
   const categoryLabel = CATEGORY_LABELS[article.category] || article.category
 
+  // Curated relevance: tickers from the user's own portfolio/watchlist that the
+  // curate-news agent tied to this article. Distinct from `article.tickers`,
+  // which are generic symbols newsdata.io surfaced via ai_tag.
+  const matched = Array.isArray(article.matchedTickers) ? article.matchedTickers : []
+  const isRelevant = matched.length > 0
+
 return (
     <a
       href={article.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="card group flex flex-col hover:border-gold-dim transition-colors no-underline"
+      title={isRelevant && article.curationReason ? article.curationReason : undefined}
+      className={`card group flex flex-col transition-colors no-underline ${
+        isRelevant ? 'border-gold/40 hover:border-gold' : 'hover:border-gold-dim'
+      }`}
     >
       {/* Image, if present */}
       {article.imageUrl && (
@@ -71,6 +80,24 @@ return (
           />
           {/* Subtle vignette for readability */}
           <div className="absolute inset-0 bg-gradient-to-t from-canvas/40 to-transparent pointer-events-none" />
+        </div>
+      )}
+
+      {/* Portfolio relevance badge — curate-news matched this to the user's book */}
+      {isRelevant && (
+        <div className="flex items-center gap-1.5 flex-wrap mb-2">
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-gold">
+            <Sparkles className="w-3 h-3" aria-hidden="true" />
+            Your portfolio
+          </span>
+          {matched.map((ticker) => (
+            <span
+              key={ticker}
+              className="badge-gold font-mono text-[10px] px-1.5 py-0"
+            >
+              {ticker}
+            </span>
+          ))}
         </div>
       )}
 

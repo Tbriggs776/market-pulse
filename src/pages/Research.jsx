@@ -4,28 +4,44 @@ import {
   Search, TrendingUp, TrendingDown, RefreshCw, AlertTriangle,
   Sparkles, FileText, Table2, BarChart3, Plus, Trash2,
   ArrowRight, MessageSquare, X, Check, Activity, DollarSign,
-  Percent, Globe, PieChart, ChevronRight, ChevronDown,
+  Percent, Globe, PieChart, ChevronRight, ChevronDown, CalendarDays,
 } from 'lucide-react'
-import { researchService, stocksService, marketService } from '../lib/api'
+import { researchService, stocksService, marketService, calendarService } from '../lib/api'
 import { benchApi } from '../lib/supabase'
 import AddPositionModal from '../components/portfolio/AddPositionModal'
 import PriceChart from '../components/research/PriceChart'
 import BenchDossier from '../components/research/BenchDossier'
 
 import { useAuth } from '../contexts/AuthContext'
+import { useAnonymousStore } from '../contexts/AnonymousStoreContext'
 import { Link } from 'react-router-dom'
 import { Lock } from 'lucide-react'
 const RESEARCH_TABS = [
   { id: 'brief', label: 'Ticker Brief', icon: FileText },
   { id: 'bench', label: 'Research Bench', icon: Table2 },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'overview', label: 'Market Overview', icon: BarChart3 },
 ]
+
+// Catalyst type -> display config for the Calendar tab.
+const EVENT_CONFIG = {
+  ex_dividend: { color: 'badge-gold' },
+  pay_date: { color: 'badge-positive' },
+  earnings: { color: 'badge-patriot' },
+}
 
 const STATUS_CONFIG = {
   evaluating: { label: 'Evaluating', color: 'badge-gold' },
   bullish: { label: 'Bullish', color: 'badge-positive' },
   bearish: { label: 'Bearish', color: 'badge-crimson' },
   passed: { label: 'Passed', color: 'badge-neutral' },
+}
+
+// Deep-dive fit verdict styling.
+const FIT_CONFIG = {
+  hold: { label: 'Hold / Own', color: 'badge-positive' },
+  research: { label: 'Worth Researching', color: 'badge-gold' },
+  pass: { label: 'Pass', color: 'badge-neutral' },
 }
 
 function ResearchBenchGate() {
@@ -88,6 +104,7 @@ export default function Research() {
 
       {activeTab === 'brief' && <TickerBrief />}
       {activeTab === 'bench' && <ResearchBenchGate />}
+      {activeTab === 'calendar' && <CatalystCalendar />}
       {activeTab === 'overview' && <MarketOverview />}
     </div>
   )
@@ -409,6 +426,8 @@ function TickerBrief() {
             </div>
           </div>
 
+          <DeepDive key={brief.symbol} symbol={brief.symbol} />
+
           {brief.company?.description && (
             <div className="card">
               <h3 className="text-xs font-medium text-text-muted uppercase tracking-wide mb-3">About {brief.company.name}</h3>
@@ -428,6 +447,303 @@ function TickerBrief() {
             Enter a stock symbol above to get company details, price data, and an AI-generated investment thesis.
           </p>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════
+// Deep Dive (research-deep-dive agent)
+// ════════════════════════════════════════════════════
+
+function DeepDive({ symbol }) {
+  const [open, setOpen] = useState(false)
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['research-deep-dive', symbol],
+    queryFn: () => researchService.getDeepDive(symbol),
+    enabled: open,
+    staleTime: 30 * 60 * 1000,
+    gcTime: 2 * 60 * 60 * 1000,
+    retry: 1,
+  })
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="btn-secondary w-full justify-center border-gold/30 hover:border-gold"
+      >
+        <Sparkles className="w-4 h-4 text-gold" />
+        Run Deep Dive — bull/bear, dividend, risks &amp; fit
+      </button>
+    )
+  }
+
+  if (isLoading) {
+    return (
+      <div className="card-elevated border-gold/30 animate-pulse">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles className="w-4 h-4 text-gold" />
+          <span className="text-sm text-gold">Running deep dive on {symbol}…</span>
+        </div>
+        <div className="space-y-3">
+          <div className="h-4 bg-surface-elevated rounded w-2/3" />
+          <div className="h-20 bg-surface-elevated rounded w-full" />
+          <div className="h-20 bg-surface-elevated rounded w-full" />
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="card border-crimson/30">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-crimson text-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            {error.message || 'Deep dive failed'}
+          </div>
+          <button onClick={() => setOpen(false)} className="btn-ghost text-xs">Dismiss</button>
+        </div>
+      </div>
+    )
+  }
+
+  const d = data?.dossier
+  if (!d) return null
+  const fit = FIT_CONFIG[d.fitVerdict?.rating] || FIT_CONFIG.research
+
+  return (
+    <div className="card-elevated border-gold/30 space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-gold" />
+          <span className="text-xs font-medium text-gold uppercase tracking-wide">Deep Dive</span>
+        </div>
+        <span className={fit.color}>{fit.label}</span>
+      </div>
+
+      {/* Snapshot */}
+      {d.snapshot && <p className="text-sm text-text-secondary leading-relaxed">{d.snapshot}</p>}
+
+      {/* Bull / Bear */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="card border-positive/20">
+          <div className="flex items-center gap-2 mb-3 text-positive text-xs font-medium uppercase tracking-wide">
+            <TrendingUp className="w-4 h-4" /> Bull Case
+          </div>
+          <ul className="space-y-2">
+            {(d.bullCase || []).map((b, i) => (
+              <li key={i} className="text-sm text-text-secondary flex gap-2">
+                <span className="text-positive mt-1">▸</span><span>{b}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="card border-crimson/20">
+          <div className="flex items-center gap-2 mb-3 text-crimson text-xs font-medium uppercase tracking-wide">
+            <TrendingDown className="w-4 h-4" /> Bear Case
+          </div>
+          <ul className="space-y-2">
+            {(d.bearCase || []).map((b, i) => (
+              <li key={i} className="text-sm text-text-secondary flex gap-2">
+                <span className="text-crimson mt-1">▸</span><span>{b}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      {/* Dividend profile */}
+      {d.dividendProfile && (
+        <div className="flex gap-3 items-start">
+          <DollarSign className="w-4 h-4 text-gold mt-0.5 shrink-0" />
+          <div>
+            <div className="text-[10px] text-text-muted uppercase tracking-wide mb-1">Dividend Profile</div>
+            <p className="text-sm text-text-secondary leading-relaxed">{d.dividendProfile}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Key risks */}
+      {(d.keyRisks || []).length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2 text-text-muted text-[10px] uppercase tracking-wide">
+            <AlertTriangle className="w-3.5 h-3.5" /> Key Risks
+          </div>
+          <ul className="space-y-1.5">
+            {d.keyRisks.map((r, i) => (
+              <li key={i} className="text-sm text-text-secondary flex gap-2">
+                <span className="text-text-muted mt-1">•</span><span>{r}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Fit verdict */}
+      {d.fitVerdict?.rationale && (
+        <div className="card border-gold/20 bg-gold/5">
+          <div className="flex items-center gap-2 mb-2">
+            <span className={fit.color}>{fit.label}</span>
+            {data.personalized && (
+              <span className="text-[10px] text-text-muted">tailored to your rules</span>
+            )}
+          </div>
+          <p className="text-sm text-text-secondary leading-relaxed">{d.fitVerdict.rationale}</p>
+        </div>
+      )}
+
+      {/* Summary */}
+      {d.summary && (
+        <div className="prose-briefing text-sm pt-2 border-t border-border">
+          <p>{d.summary}</p>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between text-xs text-text-muted">
+        <span>Generated {data.generatedAt ? new Date(data.generatedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : ''}</span>
+        <span className="font-mono">{data.model}</span>
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════
+// Catalyst Calendar (catalyst-calendar agent)
+// ════════════════════════════════════════════════════
+
+function formatEventDate(iso) {
+  const d = new Date(iso + 'T00:00:00')
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
+function daysUntil(iso) {
+  const target = new Date(iso + 'T00:00:00').getTime()
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return Math.round((target - today.getTime()) / 86400000)
+}
+
+function CatalystCalendar() {
+  const { isAnonymous } = useAuth()
+  const { watchlist: anonWatchlist, transactions: anonTransactions } = useAnonymousStore()
+  const anonymousContext = isAnonymous
+    ? { watchlist: anonWatchlist, transactions: anonTransactions }
+    : null
+
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
+    queryKey: [
+      'catalyst-calendar',
+      isAnonymous ? `anon:${anonWatchlist.length}:${anonTransactions.length}` : 'auth',
+    ],
+    queryFn: () => calendarService.getCalendar({ anonymousContext }),
+    staleTime: 30 * 60 * 1000,
+    gcTime: 2 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  })
+
+  const events = data?.events || []
+
+  // Group consecutive events by date (the agent already sorts ascending).
+  const groups = []
+  let current = null
+  for (const ev of events) {
+    if (!current || current.date !== ev.date) {
+      current = { date: ev.date, items: [] }
+      groups.push(current)
+    }
+    current.items.push(ev)
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-text-secondary">
+          Upcoming catalysts across your holdings &amp; watchlist
+          {data?.horizonDays ? ` — next ${data.horizonDays} days` : ''}.
+        </p>
+        <button onClick={() => refetch()} disabled={isFetching} className="btn-secondary shrink-0">
+          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
+        </button>
+      </div>
+
+      {data?.note && (
+        <div className="card-elevated border-gold/20 bg-gold/5 flex gap-3 items-start">
+          <Sparkles className="w-4 h-4 text-gold mt-0.5 shrink-0" />
+          <p className="text-sm text-text-secondary leading-relaxed">{data.note}</p>
+        </div>
+      )}
+
+      {isLoading && (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="card animate-pulse">
+              <div className="h-4 bg-surface-elevated rounded w-32 mb-2" />
+              <div className="h-3 bg-surface-elevated rounded w-48" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && !isLoading && (
+        <div className="card border-crimson/30">
+          <div className="flex items-center gap-2 text-crimson text-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0" /> {error.message || 'Failed to load calendar'}
+          </div>
+        </div>
+      )}
+
+      {!isLoading && !error && events.length === 0 && (
+        <div className="card text-center py-16">
+          <CalendarDays className="w-12 h-12 text-text-muted mx-auto mb-4" />
+          <h2 className="text-lg font-semibold text-ivory mb-2">No upcoming catalysts</h2>
+          <p className="text-sm text-text-secondary max-w-md mx-auto">
+            Add dividend-paying holdings or watchlist tickers to see ex-dividend, pay, and earnings
+            dates here. Dividend catalysts surface once a company has declared them (typically a few
+            weeks ahead).
+          </p>
+        </div>
+      )}
+
+      {!isLoading && groups.length > 0 && (
+        <div className="space-y-3">
+          {groups.map((g) => {
+            const dleft = daysUntil(g.date)
+            return (
+              <div key={g.date} className="card p-0 overflow-hidden">
+                <div className="flex items-center justify-between px-4 sm:px-5 py-2 bg-surface border-b border-border">
+                  <span className="text-sm font-medium text-ivory">{formatEventDate(g.date)}</span>
+                  <span className="text-[10px] text-text-muted">
+                    {dleft <= 0 ? 'today' : `in ${dleft}d`}
+                  </span>
+                </div>
+                <div className="divide-y divide-border">
+                  {g.items.map((ev, i) => {
+                    const cfg = EVENT_CONFIG[ev.type] || { color: 'badge-neutral' }
+                    return (
+                      <div key={i} className="flex items-center gap-3 px-4 sm:px-5 py-3">
+                        <span className="font-mono font-bold text-ivory w-16 shrink-0">{ev.symbol}</span>
+                        <span className={`${cfg.color} shrink-0`}>{ev.label}</span>
+                        <span className="text-sm text-text-secondary truncate">
+                          {ev.detail || ev.name}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {!isLoading && data && !data.earningsAvailable && events.length > 0 && (
+        <p className="text-xs text-text-muted">
+          Showing dividend catalysts. Earnings dates activate once an FMP integration key is configured.
+        </p>
       )}
     </div>
   )

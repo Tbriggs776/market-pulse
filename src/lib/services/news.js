@@ -67,9 +67,49 @@ async function fetchAll({ state = 'Arizona' } = {}) {
   return { local: [], national: [], business: [], all: [] }
 }
 
+/**
+ * Portfolio-aware curated feed. Calls the curate-news Edge Function, which
+ * scores every article against the user's holdings/watchlist/rules and adds a
+ * `forYou` lens plus per-article `relevance` / `matchedTickers` annotations.
+ *
+ * For guests, pass `anonymousContext: { watchlist, transactions }` so the
+ * curator has something to anchor on (the function reads authed users from the
+ * DB via their session token automatically).
+ *
+ * Never throws and always returns the canonical fetchAll shape (plus the
+ * curation extras): on any failure it transparently falls back to the
+ * uncurated feed so the dashboard always renders.
+ */
+async function fetchCurated({ state = 'Arizona', anonymousContext = null } = {}) {
+  try {
+    const { data, error } = await supabase.functions.invoke('curate-news', {
+      body: { state, anonymousContext },
+    })
+    if (error || !data || !data.all) {
+      if (error) console.warn('[news] curate failed, using base feed:', error.message)
+      const base = await fetchAll({ state })
+      return { ...base, forYou: [], curated: false, profileTickers: [] }
+    }
+    return {
+      all: data.all,
+      local: data.local || [],
+      national: data.national || [],
+      business: data.business || [],
+      forYou: data.forYou || [],
+      curated: Boolean(data.curated),
+      profileTickers: data.profileTickers || [],
+    }
+  } catch (err) {
+    console.warn('[news] curate threw, using base feed:', err.message)
+    const base = await fetchAll({ state })
+    return { ...base, forYou: [], curated: false, profileTickers: [] }
+  }
+}
+
 export const newsService = {
   fetchLocal,
   fetchNational,
   fetchBusiness,
   fetchAll,
+  fetchCurated,
 }

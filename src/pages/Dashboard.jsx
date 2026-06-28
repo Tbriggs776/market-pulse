@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { RefreshCw, Newspaper, MapPin, Flag, Briefcase, Globe, Lightbulb, ArrowRight } from 'lucide-react'
+import { RefreshCw, Newspaper, MapPin, Flag, Briefcase, Globe, Lightbulb, ArrowRight, Sparkles } from 'lucide-react'
 import { newsService } from '../lib/api'
 import NewsCard from '../components/news/NewsCard'
 import NewsCardSkeleton from '../components/news/NewsCardSkeleton'
@@ -21,13 +21,14 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('all')
   const { profile } = useAuth()
   const { isAnonymous } = useAuth()
-  const { state: anonState } = useAnonymousStore()
+  const { state: anonState, watchlist: anonWatchlist, transactions: anonTransactions } = useAnonymousStore()
   const state = isAnonymous ? anonState : (profile?.state || 'Arizona')
 
-  // Update local tab label to match user's state
-  const tabs = TABS.map((t) =>
-    t.id === 'local' ? { ...t, label: state } : t
-  )
+  // Guests have no server-side portfolio -- hand the curator their session
+  // watchlist + transactions so it has something to anchor relevance on.
+  const anonymousContext = isAnonymous
+    ? { watchlist: anonWatchlist, transactions: anonTransactions }
+    : null
 
   const {
     data: news,
@@ -36,17 +37,35 @@ export default function Dashboard() {
     refetch,
     error,
   } = useQuery({
-    queryKey: ['news', state],
-    queryFn: () => newsService.fetchAll({ state }),
+    // Re-curate when the guest's session portfolio changes; authed users are
+    // read server-side, so state + a manual refresh is enough.
+    queryKey: [
+      'news-curated',
+      state,
+      isAnonymous ? `anon:${anonWatchlist.length}:${anonTransactions.length}` : 'auth',
+    ],
+    queryFn: () => newsService.fetchCurated({ state, anonymousContext }),
     staleTime: 10 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
     refetchOnWindowFocus: false,
   })
 
+  // Show the "For You" lens only when the curator actually produced relevant hits.
+  const hasForYou = Boolean(news?.curated && news?.forYou?.length > 0)
+
+  // Build the tab list: For You (when available) -> All -> Local -> National -> Business.
+  const tabs = [
+    ...(hasForYou ? [{ id: 'forYou', label: 'For You', icon: Sparkles }] : []),
+    ...TABS.map((t) => (t.id === 'local' ? { ...t, label: state } : t)),
+  ]
+
+  // If the active tab disappears (e.g. For You emptied out), fall back to All.
+  const resolvedTab = tabs.some((t) => t.id === activeTab) ? activeTab : 'all'
+
   const displayArticles = news
-    ? activeTab === 'all'
+    ? resolvedTab === 'all'
       ? news.all
-      : news[activeTab] || []
+      : news[resolvedTab] || []
     : []
 
   // Investment Rules CTA: only authed, only when rules aren't completed.
@@ -124,10 +143,10 @@ export default function Dashboard() {
               <button
                 key={tab.id}
                 role="tab"
-                aria-selected={activeTab === tab.id}
+                aria-selected={resolvedTab === tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                  activeTab === tab.id
+                  resolvedTab === tab.id
                     ? 'bg-gold/15 text-gold-bright'
                     : 'text-text-secondary hover:text-ivory'
                 }`}

@@ -21,6 +21,28 @@ entrypoint = "./functions/fetch-news/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/fetch-news/*.html" ]
 
+[functions.curate-news]
+enabled = true
+verify_jwt = true
+import_map = "./functions/curate-news/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/curate-news/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/curate-news/*.html" ]
+
+[functions.catalyst-calendar]
+enabled = true
+verify_jwt = true
+import_map = "./functions/catalyst-calendar/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/catalyst-calendar/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/catalyst-calendar/*.html" ]
+
 [functions.stock-quote]
 enabled = true
 verify_jwt = true
@@ -42,6 +64,17 @@ entrypoint = "./functions/research-brief/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/research-brief/*.html" ]
+
+[functions.research-deep-dive]
+enabled = true
+verify_jwt = true
+import_map = "./functions/research-deep-dive/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/research-deep-dive/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/research-deep-dive/*.html" ]
 
 [functions.market-overview]
 enabled = true

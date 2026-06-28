@@ -80,11 +80,38 @@ function toPublicArticle(row: any) {
   }
 }
 
+// Quality params layered onto every query to cut noise at the source.
+// NOTE: prioritydomain / removeduplicate / timeframe require a paid newsdata.io
+// tier. fetchFromNewsdata retries with the bare `fallback` param set if the API
+// rejects the request, so the feed degrades gracefully on the free tier.
+const QUALITY_PARAMS: Record<string, string> = {
+  prioritydomain: 'top',   // restrict to reputable, high-traffic sources
+  removeduplicate: '1',    // server-side near-duplicate collapsing
+  timeframe: '48',         // last 48 hours only -- this is a daily surface
+}
+
+// The bare state name (`q=Arizona`) pulls in sports, crime, weather, obituaries
+// -- none of it investing- or policy-relevant. Pair the state with an economic/
+// policy keyword set so local news stays on-signal.
+const LOCAL_KEYWORDS =
+  '(economy OR business OR jobs OR housing OR budget OR taxes OR development OR manufacturing OR energy OR infrastructure)'
+
+// National feed: bias toward market- and policy-moving stories rather than the
+// full domestic/world firehose.
+const NATIONAL_KEYWORDS =
+  '(economy OR inflation OR "Federal Reserve" OR "interest rates" OR tariffs OR fiscal OR regulation OR trade OR energy OR jobs)'
+
+/**
+ * Fetch from newsdata.io. If the primary param set is rejected (e.g. a paid-only
+ * param on a free plan, or an over-constrained query that 4xxs), retry once with
+ * `fallback` so the feed never goes dark over a narrowing tweak.
+ */
 async function fetchFromNewsdata(
   apiKey: string,
   endpoint: string,
   params: Record<string, string>,
-) {
+  fallback: Record<string, string> | null = null,
+): Promise<Array<Record<string, unknown>>> {
   const url = new URL(`${NEWSDATA_BASE}/${endpoint}`)
   url.searchParams.set('apikey', apiKey)
   for (const [key, value] of Object.entries(params)) {
@@ -93,11 +120,18 @@ async function fetchFromNewsdata(
   const res = await fetch(url.toString())
   if (!res.ok) {
     console.warn(`[fetch-news] ${endpoint} returned ${res.status}`)
+    if (fallback) {
+      console.log(`[fetch-news] retrying ${endpoint} with fallback params`)
+      return await fetchFromNewsdata(apiKey, endpoint, fallback, null)
+    }
     return []
   }
   const data = await res.json()
   if (data.status !== 'success' || !Array.isArray(data.results)) {
     console.warn('[fetch-news] unexpected response shape', data.status)
+    if (fallback) {
+      return await fetchFromNewsdata(apiKey, endpoint, fallback, null)
+    }
     return []
   }
   return data.results as Array<Record<string, unknown>>
@@ -108,24 +142,38 @@ async function fetchFromNewsdata(
 // newsdata's `top` catch-all and entertainment/sports/lifestyle/etc. on
 // purpose -- this surface is for investing + policy signal, not headlines.
 async function fetchLocal(apiKey: string, state: string) {
-  return await fetchFromNewsdata(apiKey, 'latest', {
-    q: state, country: 'us',
-    category: 'politics,business,domestic',
-    language: 'en', size: '10',
-  })
+  return await fetchFromNewsdata(
+    apiKey,
+    'latest',
+    {
+      q: `"${state}" AND ${LOCAL_KEYWORDS}`,
+      country: 'us', category: 'politics,business,domestic',
+      language: 'en', size: '10', ...QUALITY_PARAMS,
+    },
+    // Fallback: the original broad query, no paid params.
+    { q: state, country: 'us', category: 'politics,business,domestic', language: 'en', size: '10' },
+  )
 }
 async function fetchNational(apiKey: string) {
-  return await fetchFromNewsdata(apiKey, 'latest', {
-    country: 'us',
-    category: 'politics,domestic,world',
-    language: 'en', size: '10',
-  })
+  return await fetchFromNewsdata(
+    apiKey,
+    'latest',
+    {
+      q: NATIONAL_KEYWORDS,
+      country: 'us', category: 'politics,domestic,world',
+      language: 'en', size: '10', ...QUALITY_PARAMS,
+    },
+    { country: 'us', category: 'politics,domestic,world', language: 'en', size: '10' },
+  )
 }
 async function fetchBusiness(apiKey: string) {
   // newsdata's /market endpoint returns financial-market news; already curated.
-  return await fetchFromNewsdata(apiKey, 'market', {
-    language: 'en', size: '10',
-  })
+  return await fetchFromNewsdata(
+    apiKey,
+    'market',
+    { language: 'en', size: '10', ...QUALITY_PARAMS },
+    { language: 'en', size: '10' },
+  )
 }
 
 /**
