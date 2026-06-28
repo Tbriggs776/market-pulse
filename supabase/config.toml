@@ -1,7 +1,7 @@
 
 [functions.generate-briefing]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/generate-briefing/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -12,7 +12,7 @@ entrypoint = "./functions/generate-briefing/index.ts"
 
 [functions.fetch-news]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/fetch-news/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -23,7 +23,7 @@ entrypoint = "./functions/fetch-news/index.ts"
 
 [functions.curate-news]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/curate-news/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -34,7 +34,7 @@ entrypoint = "./functions/curate-news/index.ts"
 
 [functions.catalyst-calendar]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/catalyst-calendar/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -45,7 +45,7 @@ entrypoint = "./functions/catalyst-calendar/index.ts"
 
 [functions.stock-quote]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/stock-quote/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -56,7 +56,7 @@ entrypoint = "./functions/stock-quote/index.ts"
 
 [functions.research-brief]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/research-brief/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -67,7 +67,7 @@ entrypoint = "./functions/research-brief/index.ts"
 
 [functions.research-deep-dive]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/research-deep-dive/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -78,7 +78,7 @@ entrypoint = "./functions/research-deep-dive/index.ts"
 
 [functions.market-overview]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/market-overview/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -89,7 +89,7 @@ entrypoint = "./functions/market-overview/index.ts"
 
 [functions.treasury-data]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/treasury-data/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -100,7 +100,7 @@ entrypoint = "./functions/treasury-data/index.ts"
 
 [functions.spending-data]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/spending-data/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -111,7 +111,7 @@ entrypoint = "./functions/spending-data/index.ts"
 
 [functions.treasury-statements]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/treasury-statements/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
