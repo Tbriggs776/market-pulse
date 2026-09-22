@@ -24,240 +24,206 @@
 //     -d '{}'
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
+import {
+  CORS_HEADERS,
+  FRED_SERIES,
+  RISK_SYMBOLS,
+  type RiskLine,
+  type GeoItem,
+} from './constants.ts'
+import { fetchFredRate, fetchRiskSymbol } from './fred_risk.ts'
+import {
+  fetchGeopoliticsFromDb,
+  fetchGeopoliticsFromNewsdata,
+} from './geo.ts'
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers':
-    'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+function moveAbs(line: RiskLine | undefined): number {
+  if (!line) return 0
+  const v = line.change1hPct ?? line.changeSessionPct ?? 0
+  return Math.abs(v)
 }
 
-const FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
-const POLYGON_BASE = 'https://api.polygon.io'
-const NEWSDATA_BASE = 'https://newsdata.io/api/1'
+function computeRegime(
+  silent: boolean,
+  risk: RiskLine[],
+): 'quiet' | 'mixed' | 'risk-on' | 'risk-off' {
+  if (silent) return 'quiet'
 
-const FRED_SERIES = [
-  { id: 'DGS10', label: '10-Year Treasury', unit: '%' },
-  { id: 'DGS2', label: '2-Year Treasury', unit: '%' },
-  { id: 'T10Y2Y', label: '10Y\u20132Y Spread', unit: 'pp' },
-]
+  const bySym = Object.fromEntries(risk.map((r) => [r.symbol, r]))
+  const signed = (line: RiskLine | undefined): number => {
+    if (!line) return 0
+    return line.change1hPct ?? line.changeSessionPct ?? 0
+  }
 
-const RISK_SYMBOLS = [
-  { symbol: 'SPY', label: 'S&P 500 (SPY)' },
-  { symbol: 'QQQ', label: 'Nasdaq 100 (QQQ)' },
-  { symbol: 'TLT', label: '20+ Year Treasury (TLT)' },
-  { symbol: 'HYG', label: 'High Yield Corp (HYG)' },
-  { symbol: 'GLD', label: 'Gold (GLD)' },
-  { symbol: 'USO', label: 'Crude Oil (USO)' },
-  { symbol: 'UUP', label: 'US Dollar (UUP)' },
-  { symbol: 'VIXY', label: 'Short-Term VIX (VIXY)' },
-]
+  const spyM = signed(bySym['SPY'])
+  const qqqM = signed(bySym['QQQ'])
+  const hygM = signed(bySym['HYG'])
+  const vixyM = signed(bySym['VIXY'])
 
-const GEO_KEYWORDS: Array<{ term: string; weight: number }> = [
-  { term: 'fed', weight: 2 },
-  { term: 'fomc', weight: 3 },
-  { term: 'powell', weight: 2 },
-  { term: 'rate hike', weight: 3 },
-  { term: 'rate cut', weight: 3 },
-  { term: 'yield', weight: 1 },
-  { term: 'treasury', weight: 1 },
-  { term: 'war', weight: 2 },
-  { term: 'iran', weight: 2 },
-  { term: 'israel', weight: 2 },
-  { term: 'ukraine', weight: 2 },
-  { term: 'gaza', weight: 2 },
-  { term: 'oil', weight: 1 },
-  { term: 'opec', weight: 2 },
-  { term: 'tariff', weight: 2 },
-  { term: 'sanction', weight: 2 },
-  { term: 'ceasefire', weight: 2 },
-  { term: 'missile', weight: 2 },
-  { term: 'strike', weight: 1 },
-  { term: 'invasion', weight: 3 },
-]
+  const upMeaningful = (m: number) => m >= 0.35
+  const downMeaningful = (m: number) => m <= -0.35
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
+  if (upMeaningful(spyM) && upMeaningful(qqqM) && hygM > 0) return 'risk-on'
+  if (
+    (downMeaningful(spyM) && downMeaningful(qqqM)) ||
+    hygM < -0.2 ||
+    vixyM > 0.5
+  ) {
+    return 'risk-off'
+  }
+  return 'mixed'
 }
 
-function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
+serve(async (req: Request): Promise<Response> => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: CORS_HEADERS })
+  }
 
-// --- FRED: last ~5 obs, two non-missing for changeBp ---
-async function fetchFredRate(
-  apiKey: string,
-  series: { id: string; label: string; unit: string },
-): Promise<{
-  id: string
-  label: string
-  value: number | null
-  unit: string
-  changeBp: number | null
-  asOfDate: string | null
-} | null> {
-  try {
-    const url =
-      `${FRED_BASE}?series_id=${series.id}&api_key=${apiKey}` +
-      `&file_type=json&sort_order=desc&limit=5`
-    const res = await fetch(url)
-    if (!res.ok) {
-      console.warn(`[hourly-scoreboard] FRED ${series.id}: ${res.status}`)
-      return null
-    }
-    const data = await res.json()
-    const obs = (data.observations || []).filter(
-      (o: { value: string }) => o.value && o.value !== '.',
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    })
+  }
+
+  const fredKey = Deno.env.get('FRED_API_KEY')
+  const polygonKey = Deno.env.get('MASSIVE_API_KEY')
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const newsdataKey = Deno.env.get('NEWSDATA_KEY')
+
+  if (!fredKey && !polygonKey) {
+    return new Response(
+      JSON.stringify({
+        error: 'FRED_API_KEY and MASSIVE_API_KEY not configured',
+      }),
+      {
+        status: 500,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      },
     )
-    if (obs.length === 0) return null
-
-    const latest = parseFloat(obs[0].value)
-    let changeBp: number | null = null
-    if (obs.length >= 2) {
-      const prev = parseFloat(obs[1].value)
-      // Yields already in %; difference * 100 \u2192 basis points
-      changeBp = round2((latest - prev) * 100)
-    }
-
-    return {
-      id: series.id,
-      label: series.label,
-      value: round2(latest),
-      unit: series.unit,
-      changeBp,
-      asOfDate: obs[0].date || null,
-    }
-  } catch (err) {
-    console.warn(`[hourly-scoreboard] FRED ${series.id} error:`, err)
-    return null
   }
-}
 
-// --- Polygon: minute aggs for 1h change, prev for session fallback ---
-interface RiskLine {
-  symbol: string
-  label: string
-  price: number | null
-  change1hPct: number | null
-  changeSessionPct: number | null
-  asOf: string
-}
+  const errors: string[] = []
+  let riskSource: 'minute-aggs' | 'session-fallback' = 'minute-aggs'
+  let metaNote: string | undefined
 
-async function fetchPrev(
-  apiKey: string,
-  symbol: string,
-): Promise<{ price: number; open: number; changeSessionPct: number } | null> {
   try {
-    const url =
-      `${POLYGON_BASE}/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${apiKey}`
-    const res = await fetch(url)
-    if (!res.ok) return null
-    const data = await res.json()
-    if (!data.results?.length) return null
-    const r = data.results[0]
-    const changeSessionPct = r.o > 0 ? ((r.c - r.o) / r.o) * 100 : 0
-    return {
-      price: r.c,
-      open: r.o,
-      changeSessionPct: round2(changeSessionPct),
-    }
-  } catch {
-    return null
-  }
-}
+    const ratesPromise = fredKey
+      ? Promise.all(
+          FRED_SERIES.map(async (s) => {
+            const row = await fetchFredRate(fredKey, s)
+            if (!row) errors.push(`FRED ${s.id} unavailable`)
+            return row
+          }),
+        )
+      : (errors.push('FRED_API_KEY missing'), Promise.resolve([]))
 
-async function fetchMinuteAggs(
-  apiKey: string,
-  symbol: string,
-): Promise<Array<{ t: number; c: number; o: number }> | null> {
-  try {
-    const now = new Date()
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-    const from = ymd(yesterday)
-    const to = ymd(now)
-    const url =
-      `${POLYGON_BASE}/v2/aggs/ticker/${symbol}/range/1/minute/${from}/${to}` +
-      `?adjusted=true&sort=asc&limit=50000&apiKey=${apiKey}`
-    const res = await fetch(url)
-    if (!res.ok) {
-      console.warn(`[hourly-scoreboard] minute ${symbol}: ${res.status}`)
-      return null
-    }
-    const data = await res.json()
-    if (!data.results?.length) return null
-    return data.results as Array<{ t: number; c: number; o: number }>
-  } catch (err) {
-    console.warn(`[hourly-scoreboard] minute ${symbol} error:`, err)
-    return null
-  }
-}
+    const riskPromise = polygonKey
+      ? Promise.all(
+          RISK_SYMBOLS.map(async (s) => {
+            const result = await fetchRiskSymbol(polygonKey, s)
+            if (result.error) errors.push(result.error)
+            return result
+          }),
+        )
+      : (errors.push('MASSIVE_API_KEY missing'), Promise.resolve([]))
 
-async function fetchRiskSymbol(
-  apiKey: string,
-  sym: { symbol: string; label: string },
-): Promise<{ line: RiskLine | null; usedMinute: boolean; error?: string }> {
-  const asOf = new Date().toISOString()
-  const windowStart = Date.now() - 60 * 60 * 1000
-
-  const bars = await fetchMinuteAggs(apiKey, sym.symbol)
-  if (bars && bars.length > 0) {
-    const inWindow = bars.filter((b) => b.t >= windowStart)
-    const windowBars = inWindow.length >= 2 ? inWindow : bars.slice(-Math.min(bars.length, 60))
-    if (windowBars.length >= 2) {
-      const first = windowBars[0]
-      const last = windowBars[windowBars.length - 1]
-      const change1hPct =
-        first.c > 0 ? round2(((last.c - first.c) / first.c) * 100) : null
-
-      // Session: first bar of today (UTC date) open \u2192 last close; else prev
-      const today = ymd(new Date())
-      const todayBars = bars.filter((b) => ymd(new Date(b.t)) === today)
-      let changeSessionPct: number | null = null
-      if (todayBars.length >= 1) {
-        const dayOpen = todayBars[0].o
-        const dayClose = todayBars[todayBars.length - 1].c
-        changeSessionPct =
-          dayOpen > 0 ? round2(((dayClose - dayOpen) / dayOpen) * 100) : null
-      } else {
-        const prev = await fetchPrev(apiKey, sym.symbol)
-        changeSessionPct = prev?.changeSessionPct ?? null
+    const geoPromise = (async (): Promise<GeoItem[]> => {
+      if (supabaseUrl && serviceKey) {
+        try {
+          return await fetchGeopoliticsFromDb(supabaseUrl, serviceKey)
+        } catch (err) {
+          errors.push(
+            err instanceof Error ? err.message : 'news_articles failed',
+          )
+        }
       }
+      if (newsdataKey) {
+        try {
+          return await fetchGeopoliticsFromNewsdata(newsdataKey)
+        } catch (err) {
+          errors.push(
+            err instanceof Error ? err.message : 'newsdata failed',
+          )
+        }
+      }
+      return []
+    })()
 
-      return {
-        line: {
-          symbol: sym.symbol,
-          label: sym.label,
-          price: last.c,
-          change1hPct,
-          changeSessionPct,
-          asOf,
-        },
-        usedMinute: true,
+    const [rateRows, riskResults, geopolitics] = await Promise.all([
+      ratesPromise,
+      riskPromise,
+      geoPromise,
+    ])
+
+    const rates = rateRows.filter(
+      Boolean,
+    ) as NonNullable<(typeof rateRows)[0]>[]
+    const risk: RiskLine[] = []
+    let anyMinute = false
+    let anySessionOnly = false
+    for (const r of riskResults) {
+      if (r.line) {
+        risk.push(r.line)
+        if (r.usedMinute) anyMinute = true
+        else anySessionOnly = true
       }
     }
-  }
 
-  // Fallback: prev day/session aggs
-  const prev = await fetchPrev(apiKey, sym.symbol)
-  if (!prev) {
-    return {
-      line: null,
-      usedMinute: false,
-      error: `${sym.symbol}: no minute aggs or prev`,
+    if (anyMinute && !anySessionOnly) {
+      riskSource = 'minute-aggs'
+    } else if (anySessionOnly && !anyMinute) {
+      riskSource = 'session-fallback'
+      metaNote =
+        'Moves are session (prev close)—not 1h; free-tier minute aggs unavailable'
+    } else if (anyMinute && anySessionOnly) {
+      riskSource = 'minute-aggs'
+      metaNote = 'Some symbols used session fallback (minute aggs empty)'
+    } else {
+      riskSource = 'session-fallback'
     }
-  }
-  return {
-    line: {
-      symbol: sym.symbol,
-      label: sym.label,
-      price: prev.price,
-      change1hPct: null,
-      changeSessionPct: prev.changeSessionPct,
-      asOf,
-    },
-    usedMinute: false,
-  }
-}
 
-PLACEHOLDER_PART2
+    const bySym = Object.fromEntries(risk.map((r) => [r.symbol, r]))
+    const spyMove = moveAbs(bySym['SPY'])
+    const qqqMove = moveAbs(bySym['QQQ'])
+    const dgs10 = rates.find((r) => r.id === 'DGS10')
+    const ratesQuiet =
+      dgs10?.changeBp == null || Math.abs(dgs10.changeBp) < 3
+    const geoQuiet = geopolitics.length === 0
+    const silent =
+      spyMove < 0.35 && qqqMove < 0.45 && ratesQuiet && geoQuiet
+
+    const regime = computeRegime(silent, risk)
+
+    const meta: Record<string, unknown> = { errors, riskSource }
+    if (metaNote) meta.note = metaNote
+
+    return new Response(
+      JSON.stringify({
+        asOf: new Date().toISOString(),
+        regime,
+        rates,
+        risk,
+        geopolitics,
+        silent,
+        meta,
+      }),
+      {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      },
+    )
+  } catch (err) {
+    console.error('[hourly-scoreboard] failed:', err)
+    return new Response(
+      JSON.stringify({
+        error: err instanceof Error ? err.message : 'Unknown error',
+      }),
+      {
+        status: 502,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      },
+    )
+  }
+})
